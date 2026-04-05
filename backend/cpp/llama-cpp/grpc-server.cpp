@@ -22,8 +22,10 @@
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
+#include <grpcpp/security/server_credentials.h>
 #include <regex>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 #include <signal.h>
 #include <thread>
@@ -37,6 +39,43 @@ using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::Status;
+
+// gRPC bearer token auth for distributed mode.
+// Reads LOCALAI_GRPC_AUTH_TOKEN from the environment. When set, rejects
+// requests without a matching "authorization: Bearer <token>" metadata header.
+
+// Cached auth token — empty means auth is disabled.
+static std::string g_grpc_auth_token;
+
+// Minimal constant-time comparison (avoids OpenSSL dependency)
+static int ct_memcmp(const void* a, const void* b, size_t n) {
+    const unsigned char* pa = static_cast<const unsigned char*>(a);
+    const unsigned char* pb = static_cast<const unsigned char*>(b);
+    unsigned char result = 0;
+    for (size_t i = 0; i < n; i++) {
+        result |= pa[i] ^ pb[i];
+    }
+    return result;
+}
+
+// Returns OK when auth is disabled or the token matches.
+static grpc::Status checkAuth(grpc::ServerContext* context) {
+    if (g_grpc_auth_token.empty()) {
+        return grpc::Status::OK;
+    }
+    auto metadata = context->client_metadata();
+    auto it = metadata.find("authorization");
+    if (it != metadata.end()) {
+        std::string expected = "Bearer " + g_grpc_auth_token;
+        std::string got(it->second.data(), it->second.size());
+        if (expected.size() == got.size() &&
+            ct_memcmp(expected.data(), got.data(), expected.size()) == 0) {
+            return grpc::Status::OK;
+        }
+    }
+    return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "invalid token");
+}
+
 // END LocalAI
 
 
@@ -245,6 +284,12 @@ json parse_options(bool streaming, const backend::PredictOptions* predict, const
     data["ignore_eos"] = predict->ignoreeos();
     data["embeddings"] = predict->embeddings();
 
+    // Speculative decoding per-request overrides
+    // NDraft maps to speculative.n_max (maximum draft tokens per speculation step)
+    if (predict->ndraft() > 0) {
+        data["speculative.n_max"] = predict->ndraft();
+    }
+
     // Add the correlationid to json data
     data["correlation_id"] = predict->correlationid();
 
@@ -363,6 +408,16 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
     if (!request->mmproj().empty()) {
       params.mmproj.path = request->mmproj();
     }
+
+    // Draft model for speculative decoding
+    if (!request->draftmodel().empty()) {
+        params.speculative.mparams_dft.path = request->draftmodel();
+        // Default to draft type if a draft model is set but no explicit type
+        if (params.speculative.type == COMMON_SPECULATIVE_TYPE_NONE) {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_DRAFT;
+        }
+    }
+
     //  params.model_alias ??
     params.model_alias.insert(request->modelfile());
     if (!request->cachetypekey().empty()) {
@@ -570,6 +625,48 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
                     // If conversion fails, keep default value (8)
                 }
             }
+        // Speculative decoding options
+        } else if (!strcmp(optname, "spec_type") || !strcmp(optname, "speculative_type")) {
+            auto type = common_speculative_type_from_name(optval_str);
+            if (type != COMMON_SPECULATIVE_TYPE_COUNT) {
+                params.speculative.type = type;
+            }
+        } else if (!strcmp(optname, "spec_n_max") || !strcmp(optname, "draft_max")) {
+            if (optval != NULL) {
+                try { params.speculative.n_max = std::stoi(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "spec_n_min") || !strcmp(optname, "draft_min")) {
+            if (optval != NULL) {
+                try { params.speculative.n_min = std::stoi(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "spec_p_min") || !strcmp(optname, "draft_p_min")) {
+            if (optval != NULL) {
+                try { params.speculative.p_min = std::stof(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "spec_p_split")) {
+            if (optval != NULL) {
+                try { params.speculative.p_split = std::stof(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "spec_ngram_size_n") || !strcmp(optname, "ngram_size_n")) {
+            if (optval != NULL) {
+                try { params.speculative.ngram_size_n = (uint16_t)std::stoi(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "spec_ngram_size_m") || !strcmp(optname, "ngram_size_m")) {
+            if (optval != NULL) {
+                try { params.speculative.ngram_size_m = (uint16_t)std::stoi(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "spec_ngram_min_hits") || !strcmp(optname, "ngram_min_hits")) {
+            if (optval != NULL) {
+                try { params.speculative.ngram_min_hits = (uint16_t)std::stoi(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "draft_gpu_layers")) {
+            if (optval != NULL) {
+                try { params.speculative.n_gpu_layers = std::stoi(optval_str); } catch (...) {}
+            }
+        } else if (!strcmp(optname, "draft_ctx_size")) {
+            if (optval != NULL) {
+                try { params.speculative.n_ctx = std::stoi(optval_str); } catch (...) {}
+            }
         }
     }
 
@@ -714,13 +811,17 @@ private:
 public:
     BackendServiceImpl(server_context& ctx) : ctx_server(ctx) {}
 
-    grpc::Status Health(ServerContext* /*context*/, const backend::HealthMessage* /*request*/, backend::Reply* reply) override {
+    grpc::Status Health(ServerContext* context, const backend::HealthMessage* /*request*/, backend::Reply* reply) override {
+        auto auth = checkAuth(context);
+        if (!auth.ok()) return auth;
         // Implement Health RPC
         reply->set_message("OK");
         return Status::OK;
     }
 
-    grpc::Status LoadModel(ServerContext* /*context*/, const backend::ModelOptions* request, backend::Result* result) override {
+    grpc::Status LoadModel(ServerContext* context, const backend::ModelOptions* request, backend::Result* result) override {
+        auto auth = checkAuth(context);
+        if (!auth.ok()) return auth;
         // Implement LoadModel RPC
         common_params params;
         params_parse(ctx_server, request, params);
@@ -919,6 +1020,8 @@ public:
     }
 
     grpc::Status PredictStream(grpc::ServerContext* context, const backend::PredictOptions* request, grpc::ServerWriter<backend::Reply>* writer) override {
+        auto auth = checkAuth(context);
+        if (!auth.ok()) return auth;
         if (params_base.model.path.empty()) {
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
         }
@@ -1563,8 +1666,18 @@ public:
         auto attach_chat_deltas = [](backend::Reply & reply, server_task_result * raw_result) {
             // Try streaming partial result first
             auto* partial = dynamic_cast<server_task_result_cmpl_partial*>(raw_result);
-            if (partial && !partial->oaicompat_msg_diffs.empty()) {
-                populate_chat_deltas_from_diffs(reply, partial->oaicompat_msg_diffs);
+            if (partial) {
+                if (!partial->oaicompat_msg_diffs.empty()) {
+                    populate_chat_deltas_from_diffs(reply, partial->oaicompat_msg_diffs);
+                } else if (partial->is_updated) {
+                    // Autoparser is active but hasn't classified this chunk yet
+                    // (PEG parser warming up). Clear the raw message so the Go
+                    // side doesn't try to parse partial tag tokens (e.g. "<|channel>"
+                    // before the full "<|channel>thought\n" is received).
+                    // This matches llama.cpp server behavior which only emits SSE
+                    // chunks when the parser produces diffs.
+                    reply.set_message("");
+                }
                 return;
             }
             // Try final result
@@ -1622,6 +1735,8 @@ public:
     }
 
     grpc::Status Predict(ServerContext* context, const backend::PredictOptions* request, backend::Reply* reply) override {
+         auto auth = checkAuth(context);
+         if (!auth.ok()) return auth;
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -2340,6 +2455,8 @@ public:
     }
 
     grpc::Status Embedding(ServerContext* context, const backend::PredictOptions* request, backend::EmbeddingResult* embeddingResult) override {
+        auto auth = checkAuth(context);
+        if (!auth.ok()) return auth;
         if (params_base.model.path.empty()) {
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
         }
@@ -2520,7 +2637,9 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status TokenizeString(ServerContext* /*context*/, const backend::PredictOptions* request, backend::TokenizationResponse* response) override {
+    grpc::Status TokenizeString(ServerContext* context, const backend::PredictOptions* request, backend::TokenizationResponse* response) override {
+        auto auth = checkAuth(context);
+        if (!auth.ok()) return auth;
         if (params_base.model.path.empty()) {
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
         }
@@ -2761,10 +2880,18 @@ int main(int argc, char** argv) {
 
     ServerBuilder builder;
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+
+    // Initialize bearer token auth if LOCALAI_GRPC_AUTH_TOKEN is set
+    const char* auth_token = std::getenv("LOCALAI_GRPC_AUTH_TOKEN");
+    if (auth_token != nullptr && auth_token[0] != '\0') {
+        g_grpc_auth_token = auth_token;
+        std::cout << "gRPC auth enabled via LOCALAI_GRPC_AUTH_TOKEN" << std::endl;
+    }
     builder.RegisterService(&service);
     builder.SetMaxMessageSize(50 * 1024 * 1024); // 50MB
     builder.SetMaxSendMessageSize(50 * 1024 * 1024); // 50MB
     builder.SetMaxReceiveMessageSize(50 * 1024 * 1024); // 50MB
+
     std::unique_ptr<Server> server(builder.BuildAndStart());
    // run the HTTP server in a thread - see comment below
     std::thread t([&]()

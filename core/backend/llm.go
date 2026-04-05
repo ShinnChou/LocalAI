@@ -13,9 +13,9 @@ import (
 	"github.com/mudler/xlog"
 
 	"github.com/mudler/LocalAI/core/config"
-	"github.com/mudler/LocalAI/core/trace"
 	"github.com/mudler/LocalAI/core/schema"
-	"github.com/mudler/LocalAI/core/services"
+	"github.com/mudler/LocalAI/core/services/galleryop"
+	"github.com/mudler/LocalAI/core/trace"
 
 	"github.com/mudler/LocalAI/core/gallery"
 	"github.com/mudler/LocalAI/pkg/grpc/proto"
@@ -27,7 +27,7 @@ type LLMResponse struct {
 	Response    string // should this be []byte?
 	Usage       TokenUsage
 	AudioOutput string
-	Logprobs    *schema.Logprobs // Logprobs from the backend response
+	Logprobs    *schema.Logprobs   // Logprobs from the backend response
 	ChatDeltas  []*proto.ChatDelta // Pre-parsed tool calls/content from C++ autoparser
 }
 
@@ -36,6 +36,27 @@ type TokenUsage struct {
 	Completion             int
 	TimingPromptProcessing float64
 	TimingTokenGeneration  float64
+	ChatDeltas             []*proto.ChatDelta // per-chunk deltas from C++ autoparser (only set during streaming)
+}
+
+// HasChatDeltaContent returns true if any chat delta carries content or reasoning text.
+// Used to decide whether to prefer C++ autoparser deltas over Go-side tag extraction.
+func (t TokenUsage) HasChatDeltaContent() bool {
+	for _, d := range t.ChatDeltas {
+		if d.Content != "" || d.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ChatDeltaReasoningAndContent extracts accumulated reasoning and content from chat deltas.
+func (t TokenUsage) ChatDeltaReasoningAndContent() (reasoning, content string) {
+	for _, d := range t.ChatDeltas {
+		content += d.Content
+		reasoning += d.ReasoningContent
+	}
+	return reasoning, content
 }
 
 // ModelInferenceFunc is a test-friendly indirection to call model inference logic.
@@ -47,14 +68,18 @@ func ModelInference(ctx context.Context, s string, messages schema.Messages, ima
 
 	// Check if the modelFile exists, if it doesn't try to load it from the gallery
 	if o.AutoloadGalleries { // experimental
-		modelNames, err := services.ListModels(cl, loader, nil, services.SKIP_ALWAYS)
+		modelNames, err := galleryop.ListModels(cl, loader, nil, galleryop.SKIP_ALWAYS)
 		if err != nil {
 			return nil, err
 		}
-		if !slices.Contains(modelNames, c.Name) {
+		modelName := c.Name
+		if modelName == "" {
+			modelName = c.Model
+		}
+		if !slices.Contains(modelNames, modelName) {
 			utils.ResetDownloadTimers()
 			// if we failed to load the model, we try to download it
-			err := gallery.InstallModelFromGallery(ctx, o.Galleries, o.BackendGalleries, o.SystemState, loader, c.Name, gallery.GalleryModel{}, utils.DisplayDownloadFunction, o.EnforcePredownloadScans, o.AutoloadBackendGalleries)
+			err := gallery.InstallModelFromGallery(ctx, o.Galleries, o.BackendGalleries, o.SystemState, loader, modelName, gallery.GalleryModel{}, utils.DisplayDownloadFunction, o.EnforcePredownloadScans, o.AutoloadBackendGalleries)
 			if err != nil {
 				xlog.Error("failed to install model from gallery", "error", err, "model", modelFile)
 				//return nil, err
@@ -167,6 +192,9 @@ func ModelInference(ctx context.Context, s string, messages schema.Messages, ima
 					allChatDeltas = append(allChatDeltas, reply.ChatDeltas...)
 				}
 
+				// Attach per-chunk chat deltas to tokenUsage so the callback can use them
+				tokenUsage.ChatDeltas = reply.ChatDeltas
+
 				// Parse logprobs from reply if present (collect from last chunk that has them)
 				if len(reply.Logprobs) > 0 {
 					var parsedLogprobs schema.Logprobs
@@ -196,6 +224,9 @@ func ModelInference(ctx context.Context, s string, messages schema.Messages, ima
 				if len(msg) == 0 {
 					tokenCallback("", tokenUsage)
 				}
+
+				// Clear per-chunk deltas so they don't leak to the next chunk
+				tokenUsage.ChatDeltas = nil
 			})
 			if len(allChatDeltas) > 0 {
 				xlog.Debug("[ChatDeltas] streaming completed, accumulated deltas from C++ autoparser", "total_deltas", len(allChatDeltas))
@@ -252,12 +283,12 @@ func ModelInference(ctx context.Context, s string, messages schema.Messages, ima
 		trace.InitBackendTracingIfEnabled(o.TracingMaxItems)
 
 		traceData := map[string]any{
-			"chat_template":    c.TemplateConfig.Chat,
+			"chat_template":     c.TemplateConfig.Chat,
 			"function_template": c.TemplateConfig.Functions,
-			"streaming":        tokenCallback != nil,
-			"images_count":     len(images),
-			"videos_count":     len(videos),
-			"audios_count":     len(audios),
+			"streaming":         tokenCallback != nil,
+			"images_count":      len(images),
+			"videos_count":      len(videos),
+			"audios_count":      len(audios),
 		}
 
 		if len(messages) > 0 {
