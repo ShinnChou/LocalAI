@@ -10,34 +10,43 @@ import (
 	"github.com/mudler/LocalAI/core/gallery"
 	"github.com/mudler/LocalAI/core/http/middleware"
 	"github.com/mudler/LocalAI/core/schema"
-	"github.com/mudler/LocalAI/core/services"
+	"github.com/mudler/LocalAI/core/services/galleryop"
 	"github.com/mudler/LocalAI/pkg/system"
 	"github.com/mudler/xlog"
 )
+
+// UpgradeInfoProvider is an interface for querying cached backend upgrade information.
+type UpgradeInfoProvider interface {
+	GetAvailableUpgrades() map[string]gallery.UpgradeInfo
+	TriggerCheck()
+}
 
 type BackendEndpointService struct {
 	galleries         []config.Gallery
 	backendPath       string
 	backendSystemPath string
-	backendApplier    *services.GalleryService
+	backendApplier    *galleryop.GalleryService
+	upgradeChecker    UpgradeInfoProvider
 }
 
 type GalleryBackend struct {
 	ID string `json:"id"`
 }
 
-func CreateBackendEndpointService(galleries []config.Gallery, systemState *system.SystemState, backendApplier *services.GalleryService) BackendEndpointService {
+func CreateBackendEndpointService(galleries []config.Gallery, systemState *system.SystemState, backendApplier *galleryop.GalleryService, upgradeChecker UpgradeInfoProvider) BackendEndpointService {
 	return BackendEndpointService{
 		galleries:         galleries,
 		backendPath:       systemState.Backend.BackendsPath,
 		backendSystemPath: systemState.Backend.BackendsSystemPath,
 		backendApplier:    backendApplier,
+		upgradeChecker:    upgradeChecker,
 	}
 }
 
 // GetOpStatusEndpoint returns the job status
 // @Summary Returns the job status
-// @Success 200 {object} services.GalleryOpStatus "Response"
+// @Tags backends
+// @Success 200 {object} galleryop.OpStatus "Response"
 // @Router /backends/jobs/{uuid} [get]
 func (mgs *BackendEndpointService) GetOpStatusEndpoint() echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -51,7 +60,8 @@ func (mgs *BackendEndpointService) GetOpStatusEndpoint() echo.HandlerFunc {
 
 // GetAllStatusEndpoint returns all the jobs status progress
 // @Summary Returns all the jobs status progress
-// @Success 200 {object} map[string]services.GalleryOpStatus "Response"
+// @Tags backends
+// @Success 200 {object} map[string]galleryop.OpStatus "Response"
 // @Router /backends/jobs [get]
 func (mgs *BackendEndpointService) GetAllStatusEndpoint() echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -61,6 +71,7 @@ func (mgs *BackendEndpointService) GetAllStatusEndpoint() echo.HandlerFunc {
 
 // ApplyBackendEndpoint installs a new backend to a LocalAI instance
 // @Summary Install backends to LocalAI.
+// @Tags backends
 // @Param request body GalleryBackend true "query params"
 // @Success 200 {object} schema.BackendResponse "Response"
 // @Router /backends/apply [post]
@@ -76,7 +87,7 @@ func (mgs *BackendEndpointService) ApplyBackendEndpoint() echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		mgs.backendApplier.BackendGalleryChannel <- services.GalleryOp[gallery.GalleryBackend, any]{
+		mgs.backendApplier.BackendGalleryChannel <- galleryop.ManagementOp[gallery.GalleryBackend, any]{
 			ID:                 uuid.String(),
 			GalleryElementName: input.ID,
 			Galleries:          mgs.galleries,
@@ -88,6 +99,7 @@ func (mgs *BackendEndpointService) ApplyBackendEndpoint() echo.HandlerFunc {
 
 // DeleteBackendEndpoint lets delete backends from a LocalAI instance
 // @Summary delete backends from LocalAI.
+// @Tags backends
 // @Param name	path string	true	"Backend name"
 // @Success 200 {object} schema.BackendResponse "Response"
 // @Router /backends/delete/{name} [post]
@@ -95,7 +107,7 @@ func (mgs *BackendEndpointService) DeleteBackendEndpoint() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		backendName := c.Param("name")
 
-		mgs.backendApplier.BackendGalleryChannel <- services.GalleryOp[gallery.GalleryBackend, any]{
+		mgs.backendApplier.BackendGalleryChannel <- galleryop.ManagementOp[gallery.GalleryBackend, any]{
 			Delete:             true,
 			GalleryElementName: backendName,
 			Galleries:          mgs.galleries,
@@ -112,11 +124,12 @@ func (mgs *BackendEndpointService) DeleteBackendEndpoint() echo.HandlerFunc {
 
 // ListBackendsEndpoint list the available backends configured in LocalAI
 // @Summary List all Backends
+// @Tags backends
 // @Success 200 {object} []gallery.GalleryBackend "Response"
 // @Router /backends [get]
-func (mgs *BackendEndpointService) ListBackendsEndpoint(systemState *system.SystemState) echo.HandlerFunc {
+func (mgs *BackendEndpointService) ListBackendsEndpoint() echo.HandlerFunc {
 	return func(c echo.Context) error {
-		backends, err := gallery.ListSystemBackends(systemState)
+		backends, err := mgs.backendApplier.ListBackends()
 		if err != nil {
 			return err
 		}
@@ -126,6 +139,7 @@ func (mgs *BackendEndpointService) ListBackendsEndpoint(systemState *system.Syst
 
 // ListModelGalleriesEndpoint list the available galleries configured in LocalAI
 // @Summary List all Galleries
+// @Tags backends
 // @Success 200 {object} []config.Gallery "Response"
 // @Router /backends/galleries [get]
 // NOTE: This is different (and much simpler!) than above! This JUST lists the model galleries that have been loaded, not their contents!
@@ -140,8 +154,65 @@ func (mgs *BackendEndpointService) ListBackendGalleriesEndpoint() echo.HandlerFu
 	}
 }
 
+// GetUpgradesEndpoint returns the cached backend upgrade information
+// @Summary Get available backend upgrades
+// @Tags backends
+// @Success 200 {object} map[string]gallery.UpgradeInfo "Response"
+// @Router /backends/upgrades [get]
+func (mgs *BackendEndpointService) GetUpgradesEndpoint() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if mgs.upgradeChecker == nil {
+			return c.JSON(200, map[string]gallery.UpgradeInfo{})
+		}
+		return c.JSON(200, mgs.upgradeChecker.GetAvailableUpgrades())
+	}
+}
+
+// CheckUpgradesEndpoint forces an immediate upgrade check
+// @Summary Force backend upgrade check
+// @Tags backends
+// @Success 200 {object} map[string]gallery.UpgradeInfo "Response"
+// @Router /backends/upgrades/check [post]
+func (mgs *BackendEndpointService) CheckUpgradesEndpoint() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if mgs.upgradeChecker == nil {
+			return c.JSON(200, map[string]gallery.UpgradeInfo{})
+		}
+		mgs.upgradeChecker.TriggerCheck()
+		// Return current cached results (the triggered check runs async)
+		return c.JSON(200, mgs.upgradeChecker.GetAvailableUpgrades())
+	}
+}
+
+// UpgradeBackendEndpoint triggers an upgrade for a specific backend
+// @Summary Upgrade a backend
+// @Tags backends
+// @Param name path string true "Backend name"
+// @Success 200 {object} schema.BackendResponse "Response"
+// @Router /backends/upgrade/{name} [post]
+func (mgs *BackendEndpointService) UpgradeBackendEndpoint() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		backendName := c.Param("name")
+
+		uuid, err := uuid.NewUUID()
+		if err != nil {
+			return err
+		}
+
+		mgs.backendApplier.BackendGalleryChannel <- galleryop.ManagementOp[gallery.GalleryBackend, any]{
+			ID:                 uuid.String(),
+			GalleryElementName: backendName,
+			Galleries:          mgs.galleries,
+			Upgrade:            true,
+		}
+
+		return c.JSON(200, schema.BackendResponse{ID: uuid.String(), StatusURL: fmt.Sprintf("%sbackends/jobs/%s", middleware.BaseURL(c), uuid.String())})
+	}
+}
+
 // ListAvailableBackendsEndpoint list the available backends in the galleries configured in LocalAI
 // @Summary List all available Backends
+// @Tags backends
 // @Success 200 {object} []gallery.GalleryBackend "Response"
 // @Router /backends/available [get]
 func (mgs *BackendEndpointService) ListAvailableBackendsEndpoint(systemState *system.SystemState) echo.HandlerFunc {

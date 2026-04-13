@@ -32,7 +32,7 @@
 **LocalAI** is the open-source AI engine. Run any model - LLMs, vision, voice, image, video - on any hardware. No GPU required.
 
 - **Drop-in API compatibility** — OpenAI, Anthropic, ElevenLabs APIs
-- **35+ backends** — llama.cpp, vLLM, transformers, whisper, diffusers, MLX...
+- **36+ backends** — llama.cpp, vLLM, transformers, whisper, diffusers, MLX...
 - **Any hardware** — NVIDIA, AMD, Intel, Apple Silicon, Vulkan, or CPU-only
 - **Multi-user ready** — API key auth, user quotas, role-based access
 - **Built-in AI agents** — autonomous agents with tool use, RAG, MCP, and skills
@@ -42,15 +42,37 @@ Created and maintained by [Ettore Di Giacinto](https://github.com/mudler).
 
 > [:book: Documentation](https://localai.io/) | [:speech_balloon: Discord](https://discord.gg/uJAeKSAGDy) | [💻 Quickstart](https://localai.io/basics/getting_started/) | [🖼️ Models](https://models.localai.io/) | [❓FAQ](https://localai.io/faq/)
 
-## Screenshots
-
-### Chat, Model gallery
+## Guided tour
 
 https://github.com/user-attachments/assets/08cbb692-57da-48f7-963d-2e7b43883c18
 
-### Agents
+<details>
+
+<summary>
+Click to see more!
+</summary>
+
+#### User and auth
+
+https://github.com/user-attachments/assets/228fa9ad-81a3-4d43-bfb9-31557e14a36c
+
+#### Agents
 
 https://github.com/user-attachments/assets/6270b331-e21d-4087-a540-6290006b381a
+
+#### Usage metrics per user
+
+https://github.com/user-attachments/assets/cbb03379-23b4-4e3d-bd26-d152f057007f
+
+#### Fine-tuning and Quantization
+
+https://github.com/user-attachments/assets/5ba4ace9-d3df-4795-b7d4-b0b404ea71ee
+
+#### WebRTC
+
+https://github.com/user-attachments/assets/ed88e34c-fed3-4b83-8a67-4716a9feeb7b
+
+</details>
 
 ## Quickstart
 
@@ -154,6 +176,7 @@ For older news and full release notes, see [GitHub Releases](https://github.com/
 - [Object Detection](https://localai.io/features/object-detection/)
 - [Reranker API](https://localai.io/features/reranker/)
 - [P2P Inferencing](https://localai.io/features/distribute/)
+- [Distributed Mode](https://localai.io/features/distributed-mode/) — Horizontal scaling with PostgreSQL + NATS
 - [Model Context Protocol (MCP)](https://localai.io/docs/features/mcp/)
 - [Built-in Agents](https://localai.io/features/agents/) — Autonomous AI agents with tool use, RAG, skills, SSE streaming, and [Agent Hub](https://agenthub.localai.io)
 - [Backend Gallery](https://localai.io/backends/) — Install/remove backends on the fly via OCI images
@@ -162,7 +185,7 @@ For older news and full release notes, see [GitHub Releases](https://github.com/
 
 ## Supported Backends & Acceleration
 
-LocalAI supports **35+ backends** including llama.cpp, vLLM, transformers, whisper.cpp, diffusers, MLX, MLX-VLM, and many more. Hardware acceleration is available for **NVIDIA** (CUDA 12/13), **AMD** (ROCm), **Intel** (oneAPI/SYCL), **Apple Silicon** (Metal), **Vulkan**, and **NVIDIA Jetson** (L4T). All backends can be installed on-the-fly from the [Backend Gallery](https://localai.io/backends/).
+LocalAI supports **36+ backends** including llama.cpp, vLLM, transformers, whisper.cpp, diffusers, MLX, MLX-VLM, and many more. Hardware acceleration is available for **NVIDIA** (CUDA 12/13), **AMD** (ROCm), **Intel** (oneAPI/SYCL), **Apple Silicon** (Metal), **Vulkan**, and **NVIDIA Jetson** (L4T). All backends can be installed on-the-fly from the [Backend Gallery](https://localai.io/backends/).
 
 See the full [Backend & Model Compatibility Table](https://localai.io/model-compatibility/) and [GPU Acceleration guide](https://localai.io/features/gpu-acceleration/).
 
@@ -173,6 +196,7 @@ See the full [Backend & Model Compatibility Table](https://localai.io/model-comp
 - [Build from source](https://localai.io/basics/build/)
 - [Kubernetes installation](https://localai.io/basics/getting_started/#run-localai-in-kubernetes)
 - [Integrations & community projects](https://localai.io/docs/integrations/)
+- [Installation video walkthrough](https://www.youtube.com/watch?v=cMVNnlqwfw4)
 - [Media & blog posts](https://localai.io/basics/news/#media-blogs-social)
 - [Examples](https://github.com/mudler/LocalAI-examples)
 

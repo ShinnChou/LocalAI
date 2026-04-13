@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { modelsApi } from '../utils/api'
+import { useDebouncedCallback } from '../hooks/useDebounce'
 import { useOperations } from '../hooks/useOperations'
 import { useResources } from '../hooks/useResources'
 import SearchableSelect from '../components/SearchableSelect'
@@ -111,13 +112,12 @@ export default function Models() {
   const [filter, setFilter] = useState('')
   const [sort, setSort] = useState('')
   const [order, setOrder] = useState('asc')
-  const [installing, setInstalling] = useState(new Set())
+  const [installing, setInstalling] = useState(new Map())
   const [expandedRow, setExpandedRow] = useState(null)
   const [expandedFiles, setExpandedFiles] = useState(false)
   const [stats, setStats] = useState({ total: 0, installed: 0, repositories: 0 })
   const [backendFilter, setBackendFilter] = useState('')
   const [allBackends, setAllBackends] = useState([])
-  const debounceRef = useRef(null)
   const [confirmDialog, setConfirmDialog] = useState(null)
 
   // Total GPU memory for "fits" check
@@ -165,13 +165,14 @@ export default function Models() {
     if (!loading) fetchModels()
   }, [operations.length])
 
+  const debouncedFetch = useDebouncedCallback((value) => {
+    setPage(1)
+    fetchModels({ search: value, page: 1 })
+  })
+
   const handleSearch = (value) => {
     setSearch(value)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      setPage(1)
-      fetchModels({ search: value, page: 1 })
-    }, 500)
+    debouncedFetch(value)
   }
 
   const handleSort = (col) => {
@@ -185,7 +186,7 @@ export default function Models() {
 
   const handleInstall = async (modelId) => {
     try {
-      setInstalling(prev => new Set(prev).add(modelId))
+      setInstalling(prev => new Map(prev).set(modelId, Date.now()))
       await modelsApi.install(modelId)
     } catch (err) {
       addToast(`Failed to install: ${err.message}`, 'error')
@@ -216,13 +217,18 @@ export default function Models() {
   useEffect(() => {
     if (installing.size === 0) return
     setInstalling(prev => {
-      const next = new Set(prev)
+      const next = new Map(prev)
       let changed = false
-      for (const modelId of prev) {
+      for (const [modelId, timestamp] of prev) {
         const hasActiveOp = operations.some(op =>
           op.name === modelId && !op.completed && !op.error
         )
-        if (!hasActiveOp) {
+        const hasCompletedOp = operations.some(op =>
+          op.name === modelId && (op.completed || op.error)
+        )
+        const elapsed = Date.now() - timestamp
+        // Remove if operation completed, or if >5s passed with no operation ever appearing
+        if (hasCompletedOp || (!hasActiveOp && elapsed > 5000)) {
           next.delete(modelId)
           changed = true
         }
@@ -267,6 +273,9 @@ export default function Models() {
               </a>
             </div>
           </div>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/app/model-editor')}>
+            <i className="fas fa-plus" /> Add Model
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={() => navigate('/app/import-model')}>
             <i className="fas fa-upload" /> Import Model
           </button>
