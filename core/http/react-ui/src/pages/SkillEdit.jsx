@@ -191,7 +191,7 @@ function ResourcesSection({ skillName, addToast }) {
                   value={editor.content}
                   onChange={(e) => setEditor((x) => ({ ...x, content: e.target.value }))}
                   rows={14}
-                  style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.875rem', marginBottom: 'var(--spacing-md)', width: '100%' }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', marginBottom: 'var(--spacing-md)', width: '100%' }}
                 />
                 <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end' }}>
                   <button className="btn btn-secondary" onClick={() => setEditor((e) => ({ ...e, open: false }))}>Cancel</button>
@@ -344,7 +344,7 @@ export default function SkillEdit() {
 
   if (loading) {
     return (
-      <div className="page" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
+      <div className="page page--narrow" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
         <i className="fas fa-spinner fa-spin" style={{ fontSize: '2rem', color: 'var(--color-primary)' }} />
       </div>
     )
@@ -357,7 +357,7 @@ export default function SkillEdit() {
   ]
 
   return (
-    <div className="page" style={{ maxWidth: 960 }}>
+    <div className="page page--narrow">
       <style>{`
         .skilledit-back-link {
           display: inline-flex;
@@ -594,7 +594,7 @@ export default function SkillEdit() {
                     value={form.content}
                     onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
                     rows={14}
-                    style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.875rem' }}
+                    style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem' }}
                   />
                 </div>
               </div>

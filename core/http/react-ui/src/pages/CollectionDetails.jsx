@@ -164,7 +164,7 @@ export default function CollectionDetails() {
   }
 
   return (
-    <div className="page">
+    <div className="page page--narrow">
       <style>{`
         .collection-detail-upload-form {
           display: flex;
@@ -282,7 +282,7 @@ export default function CollectionDetails() {
         .collection-detail-modal-content {
           white-space: pre-wrap;
           word-break: break-word;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: var(--font-mono);
           font-size: 0.8125rem;
           background: var(--color-bg-secondary);
           border-radius: var(--radius-md);
