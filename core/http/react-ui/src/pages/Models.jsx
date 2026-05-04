@@ -1,106 +1,32 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { modelsApi } from '../utils/api'
+import { useDebouncedCallback } from '../hooks/useDebounce'
 import { useOperations } from '../hooks/useOperations'
 import { useResources } from '../hooks/useResources'
 import SearchableSelect from '../components/SearchableSelect'
 import ConfirmDialog from '../components/ConfirmDialog'
+import GalleryLoader from '../components/GalleryLoader'
 import React from 'react'
 
 
-const LOADING_PHRASES = [
-  { text: 'Loading models...', icon: 'fa-brain' },
-  { text: 'Fetching gallery...', icon: 'fa-download' },
-  { text: 'Checking availability...', icon: 'fa-circle-check' },
-  { text: 'Almost ready...', icon: 'fa-hourglass-half' },
-  { text: 'Preparing gallery...', icon: 'fa-store' },
-]
-
-function GalleryLoader() {
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * LOADING_PHRASES.length))
-  const [fade, setFade] = useState(true)
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setFade(false)
-      setTimeout(() => {
-        setIdx(prev => (prev + 1) % LOADING_PHRASES.length)
-        setFade(true)
-      }, 300)
-    }, 2800)
-    return () => clearInterval(interval)
-  }, [])
-
-  const phrase = LOADING_PHRASES[idx]
-
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', padding: 'var(--spacing-xl) var(--spacing-md)',
-      minHeight: '280px', gap: 'var(--spacing-lg)',
-    }}>
-      {/* Animated dots */}
-      <div style={{ display: 'flex', gap: '8px' }}>
-        {[0, 1, 2, 3, 4].map(i => (
-          <div key={i} style={{
-            width: 10, height: 10, borderRadius: '50%',
-            background: 'var(--color-primary)',
-            animation: `galleryDot 1.4s ease-in-out ${i * 0.15}s infinite`,
-          }} />
-        ))}
-      </div>
-      {/* Rotating phrase */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)',
-        opacity: fade ? 1 : 0,
-        transition: 'opacity 300ms ease',
-        color: 'var(--color-text-secondary)',
-        fontSize: '0.9375rem',
-        fontWeight: 500,
-      }}>
-        <i className={`fas ${phrase.icon}`} style={{ color: 'var(--color-accent)', fontSize: '1.125rem' }} />
-        {phrase.text}
-      </div>
-      {/* Skeleton rows */}
-      <div style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {[0.9, 0.7, 0.5].map((opacity, i) => (
-          <div key={i} style={{
-            height: '48px', borderRadius: 'var(--radius-md)',
-            background: 'var(--color-bg-tertiary)', opacity,
-            animation: `galleryShimmer 1.8s ease-in-out ${i * 0.2}s infinite`,
-          }} />
-        ))}
-      </div>
-      <style>{`
-        @keyframes galleryDot {
-          0%, 80%, 100% { transform: scale(0.4); opacity: 0.3; }
-          40% { transform: scale(1); opacity: 1; }
-        }
-        @keyframes galleryShimmer {
-          0%, 100% { opacity: var(--shimmer-base, 0.15); }
-          50% { opacity: var(--shimmer-peak, 0.3); }
-        }
-      `}</style>
-    </div>
-  )
-}
-
-
 const FILTERS = [
-  { key: '', label: 'All', icon: 'fa-layer-group' },
-  { key: 'llm', label: 'LLM', icon: 'fa-brain' },
-  { key: 'sd', label: 'Image', icon: 'fa-image' },
-  { key: 'multimodal', label: 'Multimodal', icon: 'fa-shapes' },
-  { key: 'vision', label: 'Vision', icon: 'fa-eye' },
-  { key: 'tts', label: 'TTS', icon: 'fa-microphone' },
-  { key: 'stt', label: 'STT', icon: 'fa-headphones' },
-  { key: 'embedding', label: 'Embedding', icon: 'fa-vector-square' },
-  { key: 'reranker', label: 'Rerank', icon: 'fa-sort' },
+  { key: '', labelKey: 'filters.all', icon: 'fa-layer-group' },
+  { key: 'llm', labelKey: 'filters.llm', icon: 'fa-brain' },
+  { key: 'sd', labelKey: 'filters.image', icon: 'fa-image' },
+  { key: 'multimodal', labelKey: 'filters.multimodal', icon: 'fa-shapes' },
+  { key: 'vision', labelKey: 'filters.vision', icon: 'fa-eye' },
+  { key: 'tts', labelKey: 'filters.tts', icon: 'fa-microphone' },
+  { key: 'stt', labelKey: 'filters.stt', icon: 'fa-headphones' },
+  { key: 'embedding', labelKey: 'filters.embedding', icon: 'fa-vector-square' },
+  { key: 'reranker', labelKey: 'filters.rerank', icon: 'fa-sort' },
 ]
 
 export default function Models() {
   const { addToast } = useOutletContext()
   const navigate = useNavigate()
+  const { t } = useTranslation('models')
   const { operations } = useOperations()
   const { resources } = useResources()
   const [models, setModels] = useState([])
@@ -111,13 +37,12 @@ export default function Models() {
   const [filter, setFilter] = useState('')
   const [sort, setSort] = useState('')
   const [order, setOrder] = useState('asc')
-  const [installing, setInstalling] = useState(new Set())
+  const [installing, setInstalling] = useState(new Map())
   const [expandedRow, setExpandedRow] = useState(null)
   const [expandedFiles, setExpandedFiles] = useState(false)
   const [stats, setStats] = useState({ total: 0, installed: 0, repositories: 0 })
   const [backendFilter, setBackendFilter] = useState('')
   const [allBackends, setAllBackends] = useState([])
-  const debounceRef = useRef(null)
   const [confirmDialog, setConfirmDialog] = useState(null)
 
   // Total GPU memory for "fits" check
@@ -150,11 +75,11 @@ export default function Models() {
       })
       setAllBackends(data?.allBackends || [])
     } catch (err) {
-      addToast(`Failed to load models: ${err.message}`, 'error')
+      addToast(t('errors.loadFailed', { message: err.message }), 'error')
     } finally {
       setLoading(false)
     }
-  }, [page, search, filter, sort, order, backendFilter, addToast])
+  }, [page, search, filter, sort, order, backendFilter, addToast, t])
 
   useEffect(() => {
     fetchModels()
@@ -165,13 +90,14 @@ export default function Models() {
     if (!loading) fetchModels()
   }, [operations.length])
 
+  const debouncedFetch = useDebouncedCallback((value) => {
+    setPage(1)
+    fetchModels({ search: value, page: 1 })
+  })
+
   const handleSearch = (value) => {
     setSearch(value)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      setPage(1)
-      fetchModels({ search: value, page: 1 })
-    }, 500)
+    debouncedFetch(value)
   }
 
   const handleSort = (col) => {
@@ -185,27 +111,27 @@ export default function Models() {
 
   const handleInstall = async (modelId) => {
     try {
-      setInstalling(prev => new Set(prev).add(modelId))
+      setInstalling(prev => new Map(prev).set(modelId, Date.now()))
       await modelsApi.install(modelId)
     } catch (err) {
-      addToast(`Failed to install: ${err.message}`, 'error')
+      addToast(t('errors.installFailed', { message: err.message }), 'error')
     }
   }
 
   const handleDelete = (modelId) => {
     setConfirmDialog({
-      title: 'Delete Model',
-      message: `Delete model ${modelId}?`,
-      confirmLabel: `Delete ${modelId}`,
+      title: t('deleteDialog.title'),
+      message: t('deleteDialog.message', { model: modelId }),
+      confirmLabel: t('deleteDialog.confirm', { model: modelId }),
       danger: true,
       onConfirm: async () => {
         setConfirmDialog(null)
         try {
           await modelsApi.delete(modelId)
-          addToast(`Deleting ${modelId}...`, 'info')
+          addToast(t('deleteDialog.deletingToast', { model: modelId }), 'info')
           fetchModels()
         } catch (err) {
-          addToast(`Failed to delete: ${err.message}`, 'error')
+          addToast(t('errors.deleteFailed', { message: err.message }), 'error')
         }
       },
     })
@@ -216,13 +142,18 @@ export default function Models() {
   useEffect(() => {
     if (installing.size === 0) return
     setInstalling(prev => {
-      const next = new Set(prev)
+      const next = new Map(prev)
       let changed = false
-      for (const modelId of prev) {
+      for (const [modelId, timestamp] of prev) {
         const hasActiveOp = operations.some(op =>
           op.name === modelId && !op.completed && !op.error
         )
-        if (!hasActiveOp) {
+        const hasCompletedOp = operations.some(op =>
+          op.name === modelId && (op.completed || op.error)
+        )
+        const elapsed = Date.now() - timestamp
+        // Remove if operation completed, or if >5s passed with no operation ever appearing
+        if (hasCompletedOp || (!hasActiveOp && elapsed > 5000)) {
           next.delete(modelId)
           changed = true
         }
@@ -248,27 +179,30 @@ export default function Models() {
   }
 
   return (
-    <div className="page">
+    <div className="page page--wide">
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <h1 className="page-title">Model Gallery</h1>
-          <p className="page-subtitle">Discover and install AI models for your workflows</p>
+          <h1 className="page-title">{t('title')}</h1>
+          <p className="page-subtitle">{t('subtitle')}</p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--spacing-md)', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 'var(--spacing-md)', fontSize: '0.8125rem' }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-primary)' }}>{stats.total}</div>
-              <div style={{ color: 'var(--color-text-muted)' }}>Available</div>
+              <div style={{ color: 'var(--color-text-muted)' }}>{t('stats.available')}</div>
             </div>
             <div style={{ textAlign: 'center' }}>
               <a onClick={() => navigate('/app/manage')} style={{ cursor: 'pointer' }}>
                 <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-success)' }}>{stats.installed}</div>
-                <div style={{ color: 'var(--color-text-muted)' }}>Installed</div>
+                <div style={{ color: 'var(--color-text-muted)' }}>{t('stats.installed')}</div>
               </a>
             </div>
           </div>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/app/model-editor')}>
+            <i className="fas fa-plus" /> {t('actions.addModel')}
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={() => navigate('/app/import-model')}>
-            <i className="fas fa-upload" /> Import Model
+            <i className="fas fa-upload" /> {t('actions.importModel')}
           </button>
         </div>
       </div>
@@ -279,7 +213,7 @@ export default function Models() {
         <input
           className="input"
           type="text"
-          placeholder="Search models..."
+          placeholder={t('search.placeholder')}
           value={search}
           onChange={(e) => handleSearch(e.target.value)}
         />
@@ -294,7 +228,7 @@ export default function Models() {
             onClick={() => { setFilter(f.key); setPage(1) }}
           >
             <i className={`fas ${f.icon}`} style={{ marginRight: 4 }} />
-            {f.label}
+            {t(f.labelKey)}
           </button>
         ))}
         {allBackends.length > 0 && (
@@ -302,9 +236,9 @@ export default function Models() {
             value={backendFilter}
             onChange={(v) => { setBackendFilter(v); setPage(1) }}
             options={allBackends}
-            placeholder="All Backends"
-            allOption="All Backends"
-            searchPlaceholder="Search backends..."
+            placeholder={t('filters.allBackends')}
+            allOption={t('filters.allBackends')}
+            searchPlaceholder={t('filters.searchBackends')}
             style={{ marginLeft: 'auto' }}
           />
         )}
@@ -316,18 +250,16 @@ export default function Models() {
       ) : models.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon"><i className="fas fa-search" /></div>
-          <h2 className="empty-state-title">No models found</h2>
+          <h2 className="empty-state-title">{t('empty.title')}</h2>
           <p className="empty-state-text">
-            {search || filter || backendFilter
-              ? 'No models match your current search or filters.'
-              : 'The model gallery is empty.'}
+            {search || filter || backendFilter ? t('empty.withFilters') : t('empty.noFilters')}
           </p>
           {(search || filter || backendFilter) && (
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => { handleSearch(''); setFilter(''); setBackendFilter(''); setPage(1) }}
             >
-              <i className="fas fa-times" /> Clear filters
+              <i className="fas fa-times" /> {t('search.clearFilters')}
             </button>
           )}
         </div>
@@ -340,15 +272,15 @@ export default function Models() {
                   <th style={{ width: '30px' }}></th>
                   <th style={{ width: '60px' }}></th>
                   <th style={{ cursor: 'pointer' }} onClick={() => handleSort('name')}>
-                    Model Name {sort === 'name' && <i className={`fas fa-arrow-${order === 'asc' ? 'up' : 'down'}`} style={{ fontSize: '0.625rem' }} />}
+                    {t('table.modelName')} {sort === 'name' && <i className={`fas fa-arrow-${order === 'asc' ? 'up' : 'down'}`} style={{ fontSize: '0.625rem' }} />}
                   </th>
-                  <th>Description</th>
-                  <th>Backend</th>
-                  <th>Size / VRAM</th>
+                  <th>{t('table.description')}</th>
+                  <th>{t('table.backend')}</th>
+                  <th>{t('table.sizeVram')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => handleSort('status')}>
-                    Status {sort === 'status' && <i className={`fas fa-arrow-${order === 'asc' ? 'up' : 'down'}`} style={{ fontSize: '0.625rem' }} />}
+                    {t('table.status')} {sort === 'status' && <i className={`fas fa-arrow-${order === 'asc' ? 'up' : 'down'}`} style={{ fontSize: '0.625rem' }} />}
                   </th>
-                  <th style={{ textAlign: 'right' }}>Actions</th>
+                  <th style={{ textAlign: 'right' }}>{t('table.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -392,7 +324,7 @@ export default function Models() {
                           {model.trustRemoteCode && (
                             <div style={{ marginTop: '2px' }}>
                               <span className="badge badge-error" style={{ fontSize: '0.625rem' }}>
-                                <i className="fas fa-circle-exclamation" /> Trust Remote Code
+                                <i className="fas fa-circle-exclamation" /> {t('table.trustRemoteCode')}
                               </span>
                             </div>
                           )}
@@ -427,18 +359,18 @@ export default function Models() {
                             <>
                               <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
                                 {model.estimated_size_display && model.estimated_size_display !== '0 B' && (
-                                  <span>Size: {model.estimated_size_display}</span>
+                                  <span>{t('table.size', { size: model.estimated_size_display })}</span>
                                 )}
                                 {model.estimated_size_display && model.estimated_size_display !== '0 B' && model.estimated_vram_display && model.estimated_vram_display !== '0 B' && ' · '}
                                 {model.estimated_vram_display && model.estimated_vram_display !== '0 B' && (
-                                  <span>VRAM: {model.estimated_vram_display}</span>
+                                  <span>{t('table.vram', { vram: model.estimated_vram_display })}</span>
                                 )}
                               </span>
                               {fit !== null && (
-                                <span style={{ fontSize: '0.6875rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ fontSize: '0.6875rem', display: 'flex', alignItems: 'center', gap: 'var(--spacing-xs)' }}>
                                   <i className="fas fa-microchip" style={{ color: fit ? 'var(--color-success)' : 'var(--color-error)' }} />
                                   <span style={{ color: fit ? 'var(--color-success)' : 'var(--color-error)' }}>
-                                    {fit ? 'Fits' : 'May not fit'}
+                                    {fit ? t('table.fits') : t('table.mayNotFit')}
                                   </span>
                                 </span>
                               )}
@@ -452,25 +384,26 @@ export default function Models() {
                       {/* Status */}
                       <td>
                         {installing ? (
-                          <div>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--color-primary)' }}>
-                              <i className="fas fa-spinner fa-spin" /> Installing...
-                            </span>
+                          <div className="inline-install">
+                            <div className="inline-install__row">
+                              <div className="operation-spinner" />
+                              <span className="inline-install__label">
+                                {progress > 0 ? t('table.installingPct', { percent: Math.round(progress) }) : `${t('table.installing')}...`}
+                              </span>
+                            </div>
                             {progress > 0 && (
-                              <div style={{ marginTop: '4px', width: '100%', maxWidth: '120px' }}>
-                                <div style={{ height: 3, background: 'var(--color-bg-tertiary)', borderRadius: 2, overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${progress}%`, background: 'var(--color-primary)', borderRadius: 2, transition: 'width 300ms' }} />
-                                </div>
+                              <div className="operation-bar-container" style={{ flex: 'none', width: '120px', marginTop: 4 }}>
+                                <div className="operation-bar" style={{ width: `${progress}%` }} />
                               </div>
                             )}
                           </div>
                         ) : model.installed ? (
                           <span className="badge badge-success">
-                            <i className="fas fa-check-circle" /> Installed
+                            <i className="fas fa-check-circle" /> {t('table.installed')}
                           </span>
                         ) : (
-                          <span className="badge" style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-text-muted)' }}>
-                            <i className="fas fa-circle" /> Not Installed
+                          <span className="badge" style={{ background: 'var(--color-surface-sunken)', color: 'var(--color-text-muted)', border: '1px solid var(--color-border-default)' }}>
+                            <i className="fas fa-circle" /> {t('table.notInstalled')}
                           </span>
                         )}
                       </td>
@@ -480,10 +413,10 @@ export default function Models() {
                         <div style={{ display: 'flex', gap: 'var(--spacing-xs)', justifyContent: 'flex-end' }} onClick={e => e.stopPropagation()}>
                           {model.installed ? (
                             <>
-                              <button className="btn btn-secondary btn-sm" onClick={() => handleInstall(name)} title="Reinstall">
+                              <button className="btn btn-secondary btn-sm" onClick={() => handleInstall(name)} title={t('actions.reinstall')}>
                                 <i className="fas fa-rotate" />
                               </button>
-                              <button className="btn btn-danger btn-sm" onClick={() => handleDelete(name)} title="Delete">
+                              <button className="btn btn-danger btn-sm" onClick={() => handleDelete(name)} title={t('actions.delete')}>
                                 <i className="fas fa-trash" />
                               </button>
                             </>
@@ -492,7 +425,7 @@ export default function Models() {
                               className="btn btn-primary btn-sm"
                               onClick={() => handleInstall(name)}
                               disabled={installing}
-                              title="Install"
+                              title={t('actions.install')}
                             >
                               <i className="fas fa-download" />
                             </button>
@@ -504,7 +437,7 @@ export default function Models() {
                     {isExpanded && (
                       <tr>
                         <td colSpan="8" style={{ padding: 0 }}>
-                          <ModelDetail model={model} fit={fit} expandedFiles={expandedFiles} setExpandedFiles={setExpandedFiles} />
+                          <ModelDetail model={model} fit={fit} expandedFiles={expandedFiles} setExpandedFiles={setExpandedFiles} t={t} />
                         </td>
                       </tr>
                     )}
@@ -557,59 +490,59 @@ function DetailRow({ label, children }) {
   )
 }
 
-function ModelDetail({ model, fit, expandedFiles, setExpandedFiles }) {
+function ModelDetail({ model, fit, expandedFiles, setExpandedFiles, t }) {
   const files = model.additionalFiles || model.files || []
   return (
     <div style={{ padding: 'var(--spacing-md) var(--spacing-lg)', background: 'var(--color-bg-primary)', borderTop: '1px solid var(--color-border-subtle)' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <tbody>
-          <DetailRow label="Description">
+          <DetailRow label={t('detail.description')}>
             {model.description && (
               <span style={{ color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>{model.description}</span>
             )}
           </DetailRow>
-          <DetailRow label="Gallery">
+          <DetailRow label={t('detail.gallery')}>
             {model.gallery && (
               <span className="badge badge-info" style={{ fontSize: '0.6875rem' }}>
                 {typeof model.gallery === 'string' ? model.gallery : model.gallery.name || '—'}
               </span>
             )}
           </DetailRow>
-          <DetailRow label="Backend">
+          <DetailRow label={t('detail.backend')}>
             {model.backend && (
               <span className="badge badge-info" style={{ fontSize: '0.6875rem' }}>
                 {model.backend}
               </span>
             )}
           </DetailRow>
-          <DetailRow label="Size">
+          <DetailRow label={t('detail.size')}>
             {model.estimated_size_display && model.estimated_size_display !== '0 B' ? model.estimated_size_display : null}
           </DetailRow>
-          <DetailRow label="VRAM">
+          <DetailRow label={t('detail.vram')}>
             {model.estimated_vram_display && model.estimated_vram_display !== '0 B' ? (
-              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
                 {model.estimated_vram_display}
                 {fit !== null && (
                   <span style={{ fontSize: '0.75rem', color: fit ? 'var(--color-success)' : 'var(--color-error)' }}>
-                    <i className="fas fa-microchip" /> {fit ? 'Fits in GPU' : 'May not fit in GPU'}
+                    <i className="fas fa-microchip" /> {fit ? t('detail.fitsGpu') : t('detail.mayNotFitGpu')}
                   </span>
                 )}
               </span>
             ) : null}
           </DetailRow>
-          <DetailRow label="License">
+          <DetailRow label={t('detail.license')}>
             {model.license && <span>{model.license}</span>}
           </DetailRow>
-          <DetailRow label="Tags">
+          <DetailRow label={t('detail.tags')}>
             {model.tags?.length > 0 && (
-              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 'var(--spacing-xs)', flexWrap: 'wrap' }}>
                 {model.tags.map(tag => (
                   <span key={tag} className="badge badge-info" style={{ fontSize: '0.6875rem' }}>{tag}</span>
                 ))}
               </div>
             )}
           </DetailRow>
-          <DetailRow label="Links">
+          <DetailRow label={t('detail.links')}>
             {model.urls?.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 {model.urls.map((url, i) => (
@@ -621,14 +554,14 @@ function ModelDetail({ model, fit, expandedFiles, setExpandedFiles }) {
             )}
           </DetailRow>
           {model.trustRemoteCode && (
-            <DetailRow label="Warning">
+            <DetailRow label={t('detail.warning')}>
               <span className="badge badge-error" style={{ fontSize: '0.6875rem' }}>
-                <i className="fas fa-circle-exclamation" /> Requires Trust Remote Code
+                <i className="fas fa-circle-exclamation" /> {t('detail.requiresTrustRemoteCode')}
               </span>
             </DetailRow>
           )}
           {files.length > 0 && (
-            <DetailRow label="Files">
+            <DetailRow label={t('detail.files')}>
               <div>
                 <button
                   className="btn btn-secondary btn-sm"
@@ -636,24 +569,24 @@ function ModelDetail({ model, fit, expandedFiles, setExpandedFiles }) {
                   style={{ marginBottom: expandedFiles ? 'var(--spacing-sm)' : 0 }}
                 >
                   <i className={`fas fa-chevron-${expandedFiles ? 'down' : 'right'}`} style={{ fontSize: '0.5rem', marginRight: 4 }} />
-                  {files.length} file{files.length !== 1 ? 's' : ''}
+                  {t('detail.fileCount', { count: files.length })}
                 </button>
                 {expandedFiles && (
                   <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
                       <thead>
                         <tr style={{ background: 'var(--color-bg-tertiary)' }}>
-                          <th style={{ padding: '4px 8px', textAlign: 'left', fontWeight: 500 }}>Filename</th>
-                          <th style={{ padding: '4px 8px', textAlign: 'left', fontWeight: 500 }}>URI</th>
-                          <th style={{ padding: '4px 8px', textAlign: 'left', fontWeight: 500 }}>SHA256</th>
+                          <th style={{ padding: 'var(--spacing-xs) var(--spacing-sm)', textAlign: 'left', fontWeight: 500 }}>{t('detail.filename')}</th>
+                          <th style={{ padding: 'var(--spacing-xs) var(--spacing-sm)', textAlign: 'left', fontWeight: 500 }}>{t('detail.uri')}</th>
+                          <th style={{ padding: 'var(--spacing-xs) var(--spacing-sm)', textAlign: 'left', fontWeight: 500 }}>{t('detail.sha256')}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {files.map((f, i) => (
                           <tr key={i} style={{ borderTop: '1px solid var(--color-border-subtle)' }}>
-                            <td style={{ padding: '4px 8px', fontFamily: 'monospace' }}>{f.filename || '—'}</td>
-                            <td style={{ padding: '4px 8px', wordBreak: 'break-all', maxWidth: 300 }}>{f.uri || '—'}</td>
-                            <td style={{ padding: '4px 8px', fontFamily: 'monospace', fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
+                            <td style={{ padding: 'var(--spacing-xs) var(--spacing-sm)', fontFamily: 'var(--font-mono)' }}>{f.filename || '—'}</td>
+                            <td style={{ padding: 'var(--spacing-xs) var(--spacing-sm)', wordBreak: 'break-all', maxWidth: 300 }}>{f.uri || '—'}</td>
+                            <td style={{ padding: 'var(--spacing-xs) var(--spacing-sm)', fontFamily: 'var(--font-mono)', fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
                               {f.sha256 ? f.sha256.substring(0, 16) + '...' : '—'}
                             </td>
                           </tr>

@@ -1,13 +1,20 @@
 ARG BASE_IMAGE=ubuntu:24.04
-ARG GRPC_BASE_IMAGE=${BASE_IMAGE}
 ARG INTEL_BASE_IMAGE=${BASE_IMAGE}
 ARG UBUNTU_CODENAME=noble
+# Optional alternate Ubuntu apt mirror(s). Empty = use upstream.
+# See .docker/apt-mirror.sh for accepted values.
+ARG APT_MIRROR=""
+ARG APT_PORTS_MIRROR=""
 
 FROM ${BASE_IMAGE} AS requirements
 
+ARG APT_MIRROR
+ARG APT_PORTS_MIRROR
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && \
+RUN --mount=type=bind,source=.docker/apt-mirror.sh,target=/usr/local/sbin/apt-mirror \
+    APT_MIRROR="${APT_MIRROR}" APT_PORTS_MIRROR="${APT_PORTS_MIRROR}" sh /usr/local/sbin/apt-mirror && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates curl wget espeak-ng libgomp1 \
         ffmpeg libopenblas0 libopenblas-dev libopus0 sox && \
@@ -149,6 +156,7 @@ RUN if [ "${BUILD_TYPE}" = "hipblas" ] && [ "${SKIP_DRIVERS}" = "false" ]; then 
         apt-get update && \
         apt-get install -y --no-install-recommends \
             hipblas-dev \
+            hipblaslt-dev \
             rocblas-dev && \
         apt-get clean && \
         rm -rf /var/lib/apt/lists/* && \
@@ -176,7 +184,7 @@ ENV PATH=/opt/rocm/bin:${PATH}
 # The requirements-core target is common to all images.  It should not be placed in requirements-core unless every single build will use it.
 FROM requirements-drivers AS build-requirements
 
-ARG GO_VERSION=1.25.4
+ARG GO_VERSION=1.26.0
 ARG CMAKE_VERSION=3.31.10
 ARG CMAKE_FROM_SOURCE=false
 ARG TARGETARCH
@@ -240,10 +248,14 @@ WORKDIR /build
 # This is a temporary workaround until Intel fixes their repository
 FROM ${INTEL_BASE_IMAGE} AS intel
 ARG UBUNTU_CODENAME=noble
+ARG APT_MIRROR
+ARG APT_PORTS_MIRROR
 RUN wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | \
 gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics.gpg
 RUN echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${UBUNTU_CODENAME}/lts/2350 unified" > /etc/apt/sources.list.d/intel-graphics.list
-RUN apt-get update && \
+RUN --mount=type=bind,source=.docker/apt-mirror.sh,target=/usr/local/sbin/apt-mirror \
+    APT_MIRROR="${APT_MIRROR}" APT_PORTS_MIRROR="${APT_PORTS_MIRROR}" sh /usr/local/sbin/apt-mirror && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         intel-oneapi-runtime-libs && \
     apt-get clean && \
@@ -319,7 +331,6 @@ COPY ./.git ./.git
 # Some of the Go backends use libs from the main src, we could further optimize the caching by building the CPP backends before here
 COPY ./pkg/grpc ./pkg/grpc
 COPY ./pkg/utils ./pkg/utils
-COPY ./pkg/langchain ./pkg/langchain
 
 RUN ls -l ./
 RUN make protogen-go

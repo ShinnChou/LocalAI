@@ -14,12 +14,15 @@ import (
 )
 
 const (
-	LLamaCPP = "llama-cpp"
+	LLamaCPP   = "llama-cpp"
+	IKLLamaCPP = "ik-llama-cpp"
 )
 
 var Aliases = map[string]string{
 	"go-llama":               LLamaCPP,
 	"llama":                  LLamaCPP,
+	"ik_llama":               IKLLamaCPP,
+	"ik-llama":               IKLLamaCPP,
 	"embedded-store":         LocalStoreBackend,
 	"huggingface-embeddings": TransformersBackend,
 	"transformers-musicgen":  TransformersBackend,
@@ -49,6 +52,15 @@ func (ml *ModelLoader) grpcModel(backend string, o *Options) func(string, string
 	return func(modelID, modelName, modelFile string) (*Model, error) {
 
 		xlog.Debug("Loading Model with gRPC", "modelID", modelID, "file", modelFile, "backend", backend, "options", *o)
+
+		// Distributed mode: delegate to the model router if set
+		ml.mu.Lock()
+		router := ml.modelRouter
+		ml.mu.Unlock()
+		if router != nil {
+			xlog.Info("Routing model to remote node via ModelRouter", "modelID", modelID, "backend", backend)
+			return router(o.context, backend, modelID, modelName, modelFile, o.gRPCOptions, o.parallelRequests)
+		}
 
 		var client *Model
 
@@ -105,7 +117,7 @@ func (ml *ModelLoader) grpcModel(backend string, o *Options) func(string, string
 
 		// Wait for the service to start up
 		ready := false
-		for i := 0; i < o.grpcAttempts; i++ {
+		for i := range o.grpcAttempts {
 			alive, err := client.GRPC(o.parallelRequests, ml.wd).HealthCheck(context.Background())
 			if alive {
 				xlog.Debug("GRPC Service Ready")
@@ -171,8 +183,12 @@ func (ml *ModelLoader) backendLoader(opts ...Option) (client grpc.Backend, err e
 
 	model, err := ml.LoadModel(o.modelID, o.model, ml.grpcModel(backend, o))
 	if err != nil {
+		// Defensive cleanup: the model usually wasn't registered yet (LoadModel
+		// failed before that), so StopGRPC reporting "model not found" is the
+		// expected case, not an error. The outer Failed-to-load log below
+		// carries the real reason.
 		if stopErr := ml.StopGRPC(only(o.modelID)); stopErr != nil {
-			xlog.Error("error stopping model", "error", stopErr, "model", o.modelID)
+			xlog.Debug("cleanup stop after failed load", "error", stopErr, "model", o.modelID)
 		}
 		xlog.Error("Failed to load model", "modelID", o.modelID, "error", err, "backend", o.backendString)
 		return nil, err
@@ -199,7 +215,7 @@ func (ml *ModelLoader) enforceLRULimit() {
 	retryInterval := ml.lruEvictionRetryInterval
 	ml.mu.Unlock()
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		result := ml.wd.EnforceLRULimit(pendingLoads)
 
 		if !result.NeedMore {
@@ -244,7 +260,14 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
 		xlog.Debug("Model already loaded", "model", o.modelID)
 		// Update last used time for LRU tracking
 		ml.updateModelLastUsed(m)
-		return m.GRPC(o.parallelRequests, ml.wd), nil
+		client := m.GRPC(o.parallelRequests, ml.wd)
+		// Wrap remote models so connection errors during inference trigger eviction
+		if m.Process() == nil {
+			client = newConnectionEvictingClient(client, o.modelID, func() {
+				ml.ShutdownModel(o.modelID)
+			})
+		}
+		return client, nil
 	}
 
 	// Enforce LRU limit before loading a new model
@@ -255,6 +278,12 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
 		client, err := ml.backendLoader(opts...)
 		if err != nil {
 			return nil, err
+		}
+		// Wrap remote models so connection errors during inference trigger eviction
+		if m := ml.CheckIsLoaded(o.modelID); m != nil && m.Process() == nil {
+			client = newConnectionEvictingClient(client, o.modelID, func() {
+				ml.ShutdownModel(o.modelID)
+			})
 		}
 		return client, nil
 	}
@@ -288,6 +317,12 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
 		model, modelerr := ml.backendLoader(options...)
 		if modelerr == nil && model != nil {
 			xlog.Info("Loads OK", "backend", key)
+			// Wrap remote models so connection errors during inference trigger eviction
+			if m := ml.CheckIsLoaded(o.modelID); m != nil && m.Process() == nil {
+				model = newConnectionEvictingClient(model, o.modelID, func() {
+					ml.ShutdownModel(o.modelID)
+				})
+			}
 			return model, nil
 		} else if modelerr != nil {
 			err = errors.Join(err, fmt.Errorf("[%s]: %w", key, modelerr))

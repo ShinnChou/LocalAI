@@ -1,7 +1,9 @@
 package backend
 
 import (
-	"math/rand"
+	"encoding/json"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,9 +61,7 @@ func ModelOptions(c config.ModelConfig, so *config.ApplicationConfig, opts ...mo
 	grpcOpts := grpcModelOpts(c, so.SystemState.Model.ModelsPath)
 	defOpts = append(defOpts, model.WithLoadGRPCLoadModelOpts(grpcOpts))
 
-	if so.ParallelBackendRequests {
-		defOpts = append(defOpts, model.EnableParallelRequests)
-	}
+	defOpts = append(defOpts, model.EnableParallelRequests)
 
 	if c.GRPC.Attempts != 0 {
 		defOpts = append(defOpts, model.WithGRPCAttempts(c.GRPC.Attempts))
@@ -86,7 +86,7 @@ func getSeed(c config.ModelConfig) int32 {
 	}
 
 	if seed == config.RAND_SEED {
-		seed = rand.Int31()
+		seed = rand.Int32()
 	}
 
 	return seed
@@ -161,6 +161,19 @@ func grpcModelOpts(c config.ModelConfig, modelPath string) *pb.ModelOptions {
 		})
 	}
 
+	engineArgsJSON := ""
+	if len(c.EngineArgs) > 0 {
+		buf, err := json.Marshal(c.EngineArgs)
+		if err != nil {
+			// ModelConfig.Validate() rejects unmarshalable engine_args at
+			// config load, so reaching here means the validator was bypassed.
+			// Silently dropping user-set options would change runtime behaviour
+			// without warning — fail loud instead.
+			panic(fmt.Sprintf("engine_args marshal failed for model %q: %v (Validate() should have caught this)", c.Model, err))
+		}
+		engineArgsJSON = string(buf)
+	}
+
 	opts := &pb.ModelOptions{
 		CUDA:                 c.CUDA || c.Diffusers.CUDA,
 		SchedulerType:        c.Diffusers.SchedulerType,
@@ -178,6 +191,7 @@ func grpcModelOpts(c config.ModelConfig, modelPath string) *pb.ModelOptions {
 		CLIPSubfolder:        c.Diffusers.ClipSubFolder,
 		Options:              c.Options,
 		Overrides:            c.Overrides,
+		EngineArgs:           engineArgsJSON,
 		CLIPSkip:             int32(c.Diffusers.ClipSkip),
 		ControlNet:           c.Diffusers.ControlNet,
 		ContextSize:          int32(ctxSize),

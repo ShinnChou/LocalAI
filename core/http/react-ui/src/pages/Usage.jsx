@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../context/AuthContext'
 import { apiUrl } from '../utils/basePath'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -28,7 +29,7 @@ function StatCard({ icon, label, value, muted }) {
         <i className={icon} style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }} />
         <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</span>
       </div>
-      <div style={{ fontSize: '1.375rem', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: muted ? 'var(--color-text-secondary)' : 'var(--color-text-primary)' }}>
+      <div style={{ fontSize: '1.375rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: muted ? 'var(--color-text-secondary)' : 'var(--color-text-primary)' }}>
         {muted ? '~' : ''}{formatNumber(value)}
       </div>
     </div>
@@ -39,12 +40,12 @@ function UsageBar({ value, max }) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0
   return (
     <div style={{
-      width: '100%', height: 6, borderRadius: 3,
+      width: '100%', height: 6, borderRadius: "var(--radius-sm)",
       background: 'var(--color-bg-primary)',
       overflow: 'hidden',
     }}>
       <div style={{
-        width: `${pct}%`, height: '100%', borderRadius: 3,
+        width: `${pct}%`, height: '100%', borderRadius: "var(--radius-sm)",
         background: 'var(--color-primary)',
         transition: 'width 0.3s ease',
       }} />
@@ -342,13 +343,13 @@ function PredictionCards({ predictions, quotaExhaustion, period }) {
                 </div>
                 {q.items.map((item, ii) => (
                   <div key={ii} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 4 }}>
-                    <span style={{ minWidth: 70, fontSize: '0.75rem', color: 'var(--color-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
+                    <span style={{ minWidth: 70, fontSize: '0.75rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
                       {item.label}
                     </span>
                     <div style={{ flex: 1, maxWidth: 200 }}>
                       <UsageBar value={item.current} max={item.max} />
                     </div>
-                    <span style={{ fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace', color: 'var(--color-text-muted)', minWidth: 100 }}>
+                    <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--color-text-muted)', minWidth: 100 }}>
                       {formatNumber(item.current)}/{formatNumber(item.max)}
                     </span>
                     {item.withinLimits ? (
@@ -409,12 +410,12 @@ function UsageTimeChart({ data, predictedData, period }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
         <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>Tokens over time</span>
         <div style={{ display: 'flex', gap: 'var(--spacing-md)', fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--color-primary)', marginRight: 4, verticalAlign: 'middle' }} />Prompt</span>
-          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--color-primary)', opacity: 0.35, marginRight: 4, verticalAlign: 'middle' }} />Completion</span>
+          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: "var(--radius-sm)", background: 'var(--color-primary)', marginRight: 4, verticalAlign: 'middle' }} />Prompt</span>
+          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: "var(--radius-sm)", background: 'var(--color-primary)', opacity: 0.35, marginRight: 4, verticalAlign: 'middle' }} />Completion</span>
           {predictedData && predictedData.length > 0 && (
             <span>
               <span style={{
-                display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+                display: 'inline-block', width: 8, height: 8, borderRadius: "var(--radius-sm)",
                 border: '1.5px dashed var(--color-primary)', background: 'transparent',
                 marginRight: 4, verticalAlign: 'middle', opacity: 0.6,
               }} />
@@ -432,7 +433,7 @@ function UsageTimeChart({ data, predictedData, period }) {
               return (
                 <g key={i}>
                   <line x1={0} y1={y} x2={chartW} y2={y} stroke="var(--color-border)" strokeOpacity={0.5} strokeDasharray={i === 0 ? 'none' : '3,3'} />
-                  <text x={-8} y={y + 4} textAnchor="end" fontSize="10" fill="var(--color-text-muted)" fontFamily="JetBrains Mono, monospace">
+                  <text x={-8} y={y + 4} textAnchor="end" fontSize="10" fill="var(--color-text-muted)" style={{ fontFamily: 'var(--font-mono)' }}>
                     {formatYLabel(t)}
                   </text>
                 </g>
@@ -537,7 +538,7 @@ function UsageTimeChart({ data, predictedData, period }) {
               return (
                 <text key={d.bucket} x={x} y={chartH + 16} textAnchor="middle" fontSize="10"
                   fill={d.predicted ? 'var(--color-text-muted)' : 'var(--color-text-secondary)'}
-                  fontFamily="JetBrains Mono, monospace"
+                  style={{ fontFamily: 'var(--font-mono)' }}
                   fontStyle={d.predicted ? 'italic' : 'normal'}
                 >
                   {formatBucket(d.bucket, period)}
@@ -556,7 +557,7 @@ function UsageTimeChart({ data, predictedData, period }) {
             borderRadius: 'var(--radius-md)',
             padding: 'var(--spacing-xs) var(--spacing-sm)',
             fontSize: '0.75rem',
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: 'var(--font-mono)',
             color: 'var(--color-text-primary)',
             pointerEvents: 'none',
             zIndex: 10,
@@ -592,8 +593,8 @@ function ModelDistChart({ rows }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
         <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>Token distribution by model</span>
         <div style={{ display: 'flex', gap: 'var(--spacing-md)', fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--color-primary)', marginRight: 4, verticalAlign: 'middle' }} />Prompt</span>
-          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--color-primary)', opacity: 0.35, marginRight: 4, verticalAlign: 'middle' }} />Completion</span>
+          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: "var(--radius-sm)", background: 'var(--color-primary)', marginRight: 4, verticalAlign: 'middle' }} />Prompt</span>
+          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: "var(--radius-sm)", background: 'var(--color-primary)', opacity: 0.35, marginRight: 4, verticalAlign: 'middle' }} />Completion</span>
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: gap }}>
@@ -603,17 +604,17 @@ function ModelDistChart({ rows }) {
           return (
             <div key={row.model} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
               <div style={{
-                width: 120, minWidth: 120, fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace',
+                width: 120, minWidth: 120, fontSize: '0.75rem', fontFamily: 'var(--font-mono)',
                 color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }} title={row.model}>
                 {row.model}
               </div>
-              <div style={{ flex: 1, height: barH, background: 'var(--color-bg-primary)', borderRadius: 4, overflow: 'hidden', display: 'flex' }}>
+              <div style={{ flex: 1, height: barH, background: 'var(--color-bg-primary)', borderRadius: "var(--radius-sm)", overflow: 'hidden', display: 'flex' }}>
                 <div style={{ width: `${promptPct}%`, height: '100%', background: 'var(--color-primary)', transition: 'width 0.3s ease' }} />
                 <div style={{ width: `${compPct}%`, height: '100%', background: 'var(--color-primary)', opacity: 0.35, transition: 'width 0.3s ease' }} />
               </div>
               <div style={{
-                minWidth: 60, textAlign: 'right', fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace',
+                minWidth: 60, textAlign: 'right', fontSize: '0.75rem', fontFamily: 'var(--font-mono)',
                 color: 'var(--color-text-muted)', fontWeight: 600,
               }}>
                 {formatNumber(row.total_tokens)}
@@ -629,6 +630,7 @@ function ModelDistChart({ rows }) {
 export default function Usage() {
   const { addToast } = useOutletContext()
   const { isAdmin, authEnabled } = useAuth()
+  const { t } = useTranslation('admin')
   const [period, setPeriod] = useState('month')
   const [loading, setLoading] = useState(true)
   const [usage, setUsage] = useState([])
@@ -679,7 +681,7 @@ export default function Usage() {
 
   if (!authEnabled) {
     return (
-      <div className="page">
+      <div className="page page--wide">
         <div className="empty-state">
           <div className="empty-state-icon"><i className="fas fa-chart-bar" /></div>
           <h2 className="empty-state-title">Usage tracking unavailable</h2>
@@ -702,13 +704,13 @@ export default function Usage() {
   const quotaExhaustion = computeQuotaExhaustion(quotas, timeSeries, period)
   const userPredictions = isAdmin && userRows.length > 0 ? generateUserPredictions(adminUsage, userRows, period) : {}
 
-  const monoCell = { fontFamily: 'JetBrains Mono, monospace', fontSize: '0.8125rem' }
+  const monoCell = { fontFamily: 'var(--font-mono)', fontSize: '0.8125rem' }
 
   return (
-    <div className="page">
+    <div className="page page--wide">
       <div className="page-header" style={{ marginBottom: 'var(--spacing-sm)' }}>
-        <h1 className="page-title">Usage</h1>
-        <p className="page-subtitle">API token usage statistics</p>
+        <h1 className="page-title">{t('usage.title')}</h1>
+        <p className="page-subtitle">{t('usage.subtitle')}</p>
       </div>
 
       {/* Period selector + tabs */}

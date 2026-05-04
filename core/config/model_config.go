@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -46,11 +47,17 @@ type ModelConfig struct {
 	KnownUsecases       *ModelConfigUsecase `yaml:"-" json:"-"`
 	Pipeline            Pipeline            `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
 
-	PromptStrings, InputStrings                []string               `yaml:"-" json:"-"`
-	InputToken                                 [][]int                `yaml:"-" json:"-"`
-	functionCallString, functionCallNameString string                 `yaml:"-" json:"-"`
-	ResponseFormat                             string                 `yaml:"-" json:"-"`
-	ResponseFormatMap                          map[string]interface{} `yaml:"-" json:"-"`
+	PromptStrings, InputStrings                []string       `yaml:"-" json:"-"`
+	InputToken                                 [][]int        `yaml:"-" json:"-"`
+	functionCallString, functionCallNameString string         `yaml:"-" json:"-"`
+	ResponseFormat                             string         `yaml:"-" json:"-"`
+	ResponseFormatMap                          map[string]any `yaml:"-" json:"-"`
+
+	// MediaMarker is the runtime-discovered multimodal marker the backend expects
+	// in the prompt (e.g. "<__media__>" or a random "<__media_<rand>__>" picked by
+	// llama.cpp). Populated on first successful ModelMetadata call. Empty until
+	// then — callers must fall back to templates.DefaultMultiMediaMarker.
+	MediaMarker string `yaml:"-" json:"-"`
 
 	FunctionsConfig functions.FunctionsConfig `yaml:"function,omitempty" json:"function,omitempty"`
 	ReasoningConfig reasoning.Config          `yaml:"reasoning,omitempty" json:"reasoning,omitempty"`
@@ -77,6 +84,8 @@ type ModelConfig struct {
 
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 	Usage       string `yaml:"usage,omitempty" json:"usage,omitempty"`
+	Disabled    *bool  `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Pinned      *bool  `yaml:"pinned,omitempty" json:"pinned,omitempty"`
 
 	Options   []string `yaml:"options,omitempty" json:"options,omitempty"`
 	Overrides []string `yaml:"overrides,omitempty" json:"overrides,omitempty"`
@@ -103,6 +112,11 @@ type AgentConfig struct {
 	LoopDetection         int  `yaml:"loop_detection,omitempty" json:"loop_detection,omitempty"`
 	MaxAdjustmentAttempts int  `yaml:"max_adjustment_attempts,omitempty" json:"max_adjustment_attempts,omitempty"`
 	ForceReasoningTool    bool `yaml:"force_reasoning_tool,omitempty" json:"force_reasoning_tool,omitempty"`
+}
+
+// HasMCPServers returns true if any MCP servers (remote or stdio) are configured.
+func (c MCPConfig) HasMCPServers() bool {
+	return c.Servers != "" || c.Stdio != ""
 }
 
 func (c *MCPConfig) MCPConfigFromYAML() (MCPGenericConfig[MCPRemoteServers], MCPGenericConfig[MCPSTDIOServers], error) {
@@ -228,7 +242,13 @@ type LLMConfig struct {
 	DisableLogStatus     bool             `yaml:"disable_log_stats,omitempty" json:"disable_log_stats,omitempty"`           // vLLM
 	DType                string           `yaml:"dtype,omitempty" json:"dtype,omitempty"`                                   // vLLM
 	LimitMMPerPrompt     LimitMMPerPrompt `yaml:"limit_mm_per_prompt,omitempty" json:"limit_mm_per_prompt,omitempty"`       // vLLM
-	MMProj               string           `yaml:"mmproj,omitempty" json:"mmproj,omitempty"`
+	// EngineArgs is a backend-native passthrough applied to the engine constructor
+	// (e.g. vLLM AsyncEngineArgs). Values may be primitives or nested maps; nested
+	// maps materialise into the backend's nested config dataclasses (e.g.
+	// SpeculativeConfig, KVTransferConfig, CompilationConfig). Unknown keys cause
+	// the backend to fail LoadModel with a list of valid names.
+	EngineArgs map[string]any `yaml:"engine_args,omitempty" json:"engine_args,omitempty"`
+	MMProj     string         `yaml:"mmproj,omitempty" json:"mmproj,omitempty"`
 
 	FlashAttention *string `yaml:"flash_attention,omitempty" json:"flash_attention,omitempty"`
 	NoKVOffloading bool    `yaml:"no_kv_offloading,omitempty" json:"no_kv_offloading,omitempty"`
@@ -490,7 +510,12 @@ func (cfg *ModelConfig) SetDefaults(opts ...ConfigLoaderOption) {
 		cfg.Debug = &trueV
 	}
 
-	guessDefaultsFromFile(cfg, lo.modelPath, ctx)
+	// If a context size was provided via LoadOptions, apply it before hooks so they
+	// don't override it with their own defaults.
+	if ctx != 0 && cfg.ContextSize == nil {
+		cfg.ContextSize = &ctx
+	}
+	runBackendHooks(cfg, lo.modelPath)
 	cfg.syncKnownUsecasesFromString()
 }
 
@@ -527,6 +552,15 @@ func (c *ModelConfig) Validate() (bool, error) {
 		}
 	}
 
+	// engine_args crosses the gRPC boundary as a JSON-encoded string. Reject
+	// unmarshalable values here so a config that would silently lose user-set
+	// options at load time is rejected at parse time instead.
+	if len(c.EngineArgs) > 0 {
+		if _, err := json.Marshal(c.EngineArgs); err != nil {
+			return false, fmt.Errorf("engine_args is not JSON-serialisable: %w", err)
+		}
+	}
+
 	return true, nil
 }
 
@@ -541,6 +575,16 @@ func (c *ModelConfig) GetModelConfigFile() string {
 // GetModelTemplate returns the model's chat template if available
 func (c *ModelConfig) GetModelTemplate() string {
 	return c.modelTemplate
+}
+
+// IsDisabled returns true if the model is disabled
+func (c *ModelConfig) IsDisabled() bool {
+	return c.Disabled != nil && *c.Disabled
+}
+
+// IsPinned returns true if the model is pinned (excluded from idle unloading and eviction)
+func (c *ModelConfig) IsPinned() bool {
+	return c.Pinned != nil && *c.Pinned
 }
 
 type ModelConfigUsecase int
@@ -560,6 +604,9 @@ const (
 	FLAG_VAD              ModelConfigUsecase = 0b010000000000
 	FLAG_VIDEO            ModelConfigUsecase = 0b100000000000
 	FLAG_DETECTION        ModelConfigUsecase = 0b1000000000000
+	FLAG_FACE_RECOGNITION    ModelConfigUsecase = 0b10000000000000
+	FLAG_SPEAKER_RECOGNITION ModelConfigUsecase = 0b100000000000000
+	FLAG_AUDIO_TRANSFORM     ModelConfigUsecase = 0b1000000000000000
 
 	// Common Subsets
 	FLAG_LLM ModelConfigUsecase = FLAG_CHAT | FLAG_COMPLETION | FLAG_EDIT
@@ -583,6 +630,9 @@ func GetAllModelConfigUsecases() map[string]ModelConfigUsecase {
 		"FLAG_LLM":              FLAG_LLM,
 		"FLAG_VIDEO":            FLAG_VIDEO,
 		"FLAG_DETECTION":        FLAG_DETECTION,
+		"FLAG_FACE_RECOGNITION":    FLAG_FACE_RECOGNITION,
+		"FLAG_SPEAKER_RECOGNITION": FLAG_SPEAKER_RECOGNITION,
+		"FLAG_AUDIO_TRANSFORM":     FLAG_AUDIO_TRANSFORM,
 	}
 }
 
@@ -619,13 +669,30 @@ func (c *ModelConfig) HasUsecases(u ModelConfigUsecase) bool {
 // In its current state, this function should ideally check for properties of the config like templates, rather than the direct backend name checks for the lower half.
 // This avoids the maintenance burden of updating this list for each new backend - but unfortunately, that's the best option for some services currently.
 func (c *ModelConfig) GuessUsecases(u ModelConfigUsecase) bool {
+	// Backends that are clearly not text-generation
+	nonTextGenBackends := []string{
+		"whisper", "piper", "kokoro",
+		"diffusers", "stablediffusion", "stablediffusion-ggml",
+		"rerankers", "silero-vad", "rfdetr", "insightface", "speaker-recognition",
+		"transformers-musicgen", "ace-step", "acestep-cpp",
+	}
+
 	if (u & FLAG_CHAT) == FLAG_CHAT {
 		if c.TemplateConfig.Chat == "" && c.TemplateConfig.ChatMessage == "" && !c.TemplateConfig.UseTokenizerTemplate {
+			return false
+		}
+		if slices.Contains(nonTextGenBackends, c.Backend) {
+			return false
+		}
+		if c.Embeddings != nil && *c.Embeddings {
 			return false
 		}
 	}
 	if (u & FLAG_COMPLETION) == FLAG_COMPLETION {
 		if c.TemplateConfig.Completion == "" {
+			return false
+		}
+		if slices.Contains(nonTextGenBackends, c.Backend) {
 			return false
 		}
 	}
@@ -683,7 +750,29 @@ func (c *ModelConfig) GuessUsecases(u ModelConfigUsecase) bool {
 	}
 
 	if (u & FLAG_DETECTION) == FLAG_DETECTION {
-		if c.Backend != "rfdetr" {
+		detectionBackends := []string{"rfdetr", "sam3-cpp", "insightface"}
+		if !slices.Contains(detectionBackends, c.Backend) {
+			return false
+		}
+	}
+
+	if (u & FLAG_FACE_RECOGNITION) == FLAG_FACE_RECOGNITION {
+		faceBackends := []string{"insightface"}
+		if !slices.Contains(faceBackends, c.Backend) {
+			return false
+		}
+	}
+
+	if (u & FLAG_SPEAKER_RECOGNITION) == FLAG_SPEAKER_RECOGNITION {
+		speakerBackends := []string{"speaker-recognition"}
+		if !slices.Contains(speakerBackends, c.Backend) {
+			return false
+		}
+	}
+
+	if (u & FLAG_AUDIO_TRANSFORM) == FLAG_AUDIO_TRANSFORM {
+		audioTransformBackends := []string{"localvqe"}
+		if !slices.Contains(audioTransformBackends, c.Backend) {
 			return false
 		}
 	}
@@ -703,7 +792,7 @@ func (c *ModelConfig) GuessUsecases(u ModelConfigUsecase) bool {
 	}
 
 	if (u & FLAG_VAD) == FLAG_VAD {
-		if c.Backend != "silero-vad" && !(c.Backend == "whisper" && slices.Contains(c.Options, "vad_only")) {
+		if c.Backend != "silero-vad" && c.Backend != "sherpa-onnx" && !(c.Backend == "whisper" && slices.Contains(c.Options, "vad_only")) {
 			return false
 		}
 	}

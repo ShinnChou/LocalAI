@@ -7,14 +7,21 @@ const userQ = (userId) => userId ? `?user_id=${enc(userId)}` : ''
 async function handleResponse(response) {
   if (!response.ok) {
     let errorMessage = `HTTP ${response.status}`
+    let errorBody = null
     try {
       const data = await response.json()
+      errorBody = data
       if (data?.error?.message) errorMessage = data.error.message
       else if (data?.error) errorMessage = data.error
     } catch (_e) {
       // response wasn't JSON
     }
-    throw new Error(errorMessage)
+    const err = new Error(errorMessage)
+    // Preserve the parsed body + status so handlers can pattern-match on
+    // structured responses (e.g. the import form's ambiguity picker).
+    err.status = response.status
+    err.body = errorBody
+    throw err
   }
   const contentType = response.headers.get('content-type')
   if (contentType && contentType.includes('application/json')) {
@@ -97,17 +104,33 @@ export const modelsApi = {
   getJobStatus: (uid) => fetchJSON(API_CONFIG.endpoints.modelsJobStatus(uid)),
   getEditConfig: (name) => fetchJSON(API_CONFIG.endpoints.modelEditGet(name)),
   editConfig: (name, body) => postJSON(API_CONFIG.endpoints.modelEdit(name), body),
+  toggleState: (name, action) => fetchJSON(API_CONFIG.endpoints.modelToggleState(name, action), { method: 'PUT' }),
+  togglePinned: (name, action) => fetchJSON(API_CONFIG.endpoints.modelTogglePinned(name, action), { method: 'PUT' }),
+  getConfigMetadata: (section) => fetchJSON(
+    section ? `${API_CONFIG.endpoints.configMetadata}?section=${section}`
+            : API_CONFIG.endpoints.configMetadata
+  ),
+  getAutocomplete: (provider) => fetchJSON(API_CONFIG.endpoints.configAutocomplete(provider)),
+  estimateVram: (body, options) => postJSON(API_CONFIG.endpoints.vramEstimate, body, options),
+  patchConfig: (name, patch) => fetchJSON(API_CONFIG.endpoints.configPatch(name), {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  }),
 }
 
 // Backends API
 export const backendsApi = {
   list: (params) => fetchJSON(buildUrl(API_CONFIG.endpoints.backends, params)),
   listInstalled: () => fetchJSON(API_CONFIG.endpoints.backendsInstalled),
+  listKnown: () => fetchJSON(API_CONFIG.endpoints.backendsKnown),
   install: (id) => postJSON(API_CONFIG.endpoints.installBackend(id), {}),
   delete: (id) => postJSON(API_CONFIG.endpoints.deleteBackend(id), {}),
   installExternal: (body) => postJSON(API_CONFIG.endpoints.installExternalBackend, body),
   getJob: (uid) => fetchJSON(API_CONFIG.endpoints.backendJob(uid)),
   deleteInstalled: (name) => postJSON(API_CONFIG.endpoints.deleteInstalledBackend(name), {}),
+  checkUpgrades: () => fetchJSON(API_CONFIG.endpoints.backendsUpgrades),
+  forceCheckUpgrades: () => postJSON(API_CONFIG.endpoints.backendsUpgradesCheck, {}),
+  upgrade: (name) => postJSON(API_CONFIG.endpoints.upgradeBackend(name), {}),
 }
 
 // Chat API (non-streaming)
@@ -141,6 +164,26 @@ export const operationsApi = {
 export const settingsApi = {
   get: () => fetchJSON(API_CONFIG.endpoints.settings),
   save: (body) => postJSON(API_CONFIG.endpoints.settings, body),
+}
+
+// Branding / whitelabeling
+// /api/branding is public (no auth) — the login page reads it before the
+// user signs in. Asset uploads/deletes still require admin privileges.
+export const brandingApi = {
+  get: () => fetchJSON('/api/branding'),
+  uploadAsset: (kind, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return fetch(apiUrl(`/api/branding/asset/${enc(kind)}`), {
+      method: 'POST',
+      body: fd,
+      credentials: 'include',
+    }).then(handleResponse)
+  },
+  deleteAsset: (kind) => fetch(apiUrl(`/api/branding/asset/${enc(kind)}`), {
+    method: 'DELETE',
+    credentials: 'include',
+  }).then(handleResponse),
 }
 
 // Backend Logs API
@@ -177,7 +220,7 @@ export const agentJobsApi = {
   createTask: (body) => postJSON(API_CONFIG.endpoints.agentTasks, body),
   updateTask: (id, body) => fetchJSON(API_CONFIG.endpoints.agentTask(id), { method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }),
   deleteTask: (id) => fetchJSON(API_CONFIG.endpoints.agentTask(id), { method: 'DELETE' }),
-  executeTask: (name) => postJSON(API_CONFIG.endpoints.executeAgentTask(name), {}),
+  executeTask: (name, body = {}) => postJSON(API_CONFIG.endpoints.executeAgentTask(name), body),
   listJobs: (allUsers) => fetchJSON(`${API_CONFIG.endpoints.agentJobs}${allUsers ? '?all_users=true' : ''}`),
   getJob: (id) => fetchJSON(API_CONFIG.endpoints.agentJob(id)),
   cancelJob: (id) => postJSON(API_CONFIG.endpoints.cancelAgentJob(id), {}),
@@ -194,48 +237,73 @@ export const videoApi = {
   generate: (body) => postJSON(API_CONFIG.endpoints.video, body),
 }
 
+// parseAudioBlobResponse — shared response handling for audio-blob endpoints.
+// Throws on non-2xx (with the API error message when present); returns the
+// blob plus the parsed Content-Disposition filename mapped to the server's
+// /generated-audio/ path so the UI can persist it in history. The audio
+// transform endpoint also surfaces the persisted *input* paths via
+// X-Audio-Input-Url / X-Audio-Reference-Url headers so the UI can replay
+// past (input, reference, output) triples from history.
+async function parseAudioBlobResponse(response) {
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new Error(data?.error?.message || `HTTP ${response.status}`)
+  }
+  let serverUrl = null
+  const disposition = response.headers.get('content-disposition')
+  if (disposition) {
+    const match = disposition.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/)
+    if (match && match[1]) serverUrl = '/generated-audio/' + match[1]
+  }
+  const inputUrl = response.headers.get('x-audio-input-url') || null
+  const referenceUrl = response.headers.get('x-audio-reference-url') || null
+  const blob = await response.blob()
+  return { blob, serverUrl, inputUrl, referenceUrl }
+}
+
+async function postAudioBlob(endpoint, body) {
+  const response = await fetch(apiUrl(endpoint), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return parseAudioBlobResponse(response)
+}
+
+async function postMultipartAudioBlob(endpoint, formData) {
+  const response = await fetch(apiUrl(endpoint), { method: 'POST', body: formData })
+  return parseAudioBlobResponse(response)
+}
+
 // TTS
 export const ttsApi = {
-  generate: async (body) => {
-    const response = await fetch(apiUrl(API_CONFIG.endpoints.tts), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}))
-      throw new Error(data?.error?.message || `HTTP ${response.status}`)
-    }
-    return response.blob()
-  },
-  generateV1: async (body) => {
-    const response = await fetch(apiUrl(API_CONFIG.endpoints.audioSpeech), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}))
-      throw new Error(data?.error?.message || `HTTP ${response.status}`)
-    }
-    return response.blob()
-  },
+  generate: (body) => postAudioBlob(API_CONFIG.endpoints.tts, body),
+  generateV1: (body) => postAudioBlob(API_CONFIG.endpoints.audioSpeech, body),
 }
 
 // Sound generation
 export const soundApi = {
-  generate: async (body) => {
-    const response = await fetch(apiUrl(API_CONFIG.endpoints.soundGeneration), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}))
-      throw new Error(data?.error?.message || `HTTP ${response.status}`)
+  generate: (body) => postAudioBlob(API_CONFIG.endpoints.soundGeneration, body),
+}
+
+// Audio transform (echo cancellation, noise suppression, voice conversion, etc.)
+export const audioTransformApi = {
+  process: ({ model, audioFile, referenceFile, format, sampleRate, params }) => {
+    const fd = new FormData()
+    fd.append('model', model)
+    fd.append('audio', audioFile, audioFile?.name || 'audio.wav')
+    if (referenceFile) fd.append('reference', referenceFile, referenceFile.name || 'reference.wav')
+    if (format) fd.append('response_format', format)
+    if (sampleRate) fd.append('sample_rate', String(sampleRate))
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v == null || v === '') continue
+        fd.append(`params[${k}]`, String(v))
+      }
     }
-    return response.blob()
+    return postMultipartAudioBlob(API_CONFIG.endpoints.audioTransformations, fd)
   },
+  streamUrl: () => apiUrl(API_CONFIG.endpoints.audioTransformStream).replace(/^http/, 'ws'),
 }
 
 // Audio transcription
@@ -247,6 +315,26 @@ export const audioApi = {
     })
     return handleResponse(response)
   },
+}
+
+// Face biometrics — backend spec: core/http/endpoints/localai/face_*.go
+export const faceApi = {
+  verify: (body) => postJSON(API_CONFIG.endpoints.faceVerify, body),
+  analyze: (body) => postJSON(API_CONFIG.endpoints.faceAnalyze, body),
+  embed: (body) => postJSON(API_CONFIG.endpoints.faceEmbed, body),
+  register: (body) => postJSON(API_CONFIG.endpoints.faceRegister, body),
+  identify: (body) => postJSON(API_CONFIG.endpoints.faceIdentify, body),
+  forget: (body) => postJSON(API_CONFIG.endpoints.faceForget, body),
+}
+
+// Voice biometrics — backend spec: core/http/endpoints/localai/voice_*.go
+export const voiceApi = {
+  verify: (body) => postJSON(API_CONFIG.endpoints.voiceVerify, body),
+  analyze: (body) => postJSON(API_CONFIG.endpoints.voiceAnalyze, body),
+  embed: (body) => postJSON(API_CONFIG.endpoints.voiceEmbed, body),
+  register: (body) => postJSON(API_CONFIG.endpoints.voiceRegister, body),
+  identify: (body) => postJSON(API_CONFIG.endpoints.voiceIdentify, body),
+  forget: (body) => postJSON(API_CONFIG.endpoints.voiceForget, body),
 }
 
 // Realtime / WebRTC
@@ -421,6 +509,50 @@ export const quantizationApi = {
   importModel: (id, data) => postJSON(`/api/quantization/jobs/${enc(id)}/import`, data),
   progressUrl: (id) => apiUrl(`/api/quantization/jobs/${enc(id)}/progress`),
   downloadUrl: (id) => apiUrl(`/api/quantization/jobs/${enc(id)}/download`),
+}
+
+// Nodes API (distributed)
+export const nodesApi = {
+  list: () => fetchJSON(API_CONFIG.endpoints.nodes),
+  get: (id) => fetchJSON(API_CONFIG.endpoints.node(id)),
+  delete: (id) => fetchJSON(API_CONFIG.endpoints.node(id), { method: 'DELETE' }),
+  drain: (id) => postJSON(API_CONFIG.endpoints.nodeDrain(id), {}),
+  resume: (id) => postJSON(API_CONFIG.endpoints.nodeResume(id), {}),
+  approve: (id) => postJSON(API_CONFIG.endpoints.nodeApprove(id), {}),
+  getModels: (id) => fetchJSON(API_CONFIG.endpoints.nodeModels(id)),
+  getBackends: (id) => fetchJSON(API_CONFIG.endpoints.nodeBackends(id)),
+  // installBackend installs a gallery backend on a single node. opts can
+  // override the gallery path and supply a direct URI (OCI image / URL / file
+  // path) plus an optional name+alias, mirroring the standalone /backends/
+  // install-external surface but scoped to one node.
+  installBackend: (id, backend, opts = {}) => postJSON(API_CONFIG.endpoints.nodeBackendsInstall(id), {
+    backend,
+    ...(opts.uri ? { uri: opts.uri } : {}),
+    ...(opts.name ? { name: opts.name } : {}),
+    ...(opts.alias ? { alias: opts.alias } : {}),
+    ...(opts.backend_galleries ? { backend_galleries: opts.backend_galleries } : {}),
+  }),
+  deleteBackend: (id, backend) => postJSON(API_CONFIG.endpoints.nodeBackendsDelete(id), { backend }),
+  getBackendLogs: (id) => fetchJSON(API_CONFIG.endpoints.nodeBackendLogs(id)),
+  getBackendLogLines: (id, modelId) => fetchJSON(API_CONFIG.endpoints.nodeBackendLogsModel(id, modelId)),
+  unloadModel: (id, modelName) => postJSON(API_CONFIG.endpoints.nodeModelsUnload(id), { model_name: modelName }),
+  getLabels: (id) => fetchJSON(API_CONFIG.endpoints.nodeLabels(id)),
+  mergeLabels: (id, labels) => fetchJSON(API_CONFIG.endpoints.nodeLabels(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(labels) }),
+  deleteLabel: (id, key) => fetchJSON(API_CONFIG.endpoints.nodeLabelKey(id, key), { method: 'DELETE' }),
+  // Set a sticky admin override for the per-node replica cap. The override
+  // is preserved across worker restarts; call resetMaxReplicasPerModel to
+  // hand control back to the worker's CLI flag.
+  updateMaxReplicasPerModel: (id, value) => fetchJSON(API_CONFIG.endpoints.nodeMaxReplicasPerModel(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  }),
+  resetMaxReplicasPerModel: (id) => fetchJSON(API_CONFIG.endpoints.nodeMaxReplicasPerModel(id), {
+    method: 'DELETE',
+  }),
+  listScheduling: () => fetchJSON(API_CONFIG.endpoints.nodesScheduling),
+  setScheduling: (config) => postJSON(API_CONFIG.endpoints.nodesScheduling, config),
+  deleteScheduling: (model) => fetchJSON(API_CONFIG.endpoints.nodesSchedulingModel(model), { method: 'DELETE' }),
 }
 
 // File to base64 helper

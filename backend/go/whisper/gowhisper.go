@@ -120,6 +120,12 @@ func (w *Whisper) AudioTranscription(opts *pb.TranscriptRequest) (pb.TranscriptR
 	}
 
 	data := buf.AsFloat32Buffer().Data
+	// whisper.cpp resamples to 16 kHz internally; this matches buf.Format.SampleRate
+	// for the converted file produced by AudioToWav above.
+	var duration float32
+	if buf.Format != nil && buf.Format.SampleRate > 0 {
+		duration = float32(len(data)) / float32(buf.Format.SampleRate)
+	}
 	segsLen := uintptr(0xdeadbeef)
 	segsLenPtr := unsafe.Pointer(&segsLen)
 
@@ -133,7 +139,10 @@ func (w *Whisper) AudioTranscription(opts *pb.TranscriptRequest) (pb.TranscriptR
 		// segment start/end conversion factor taken from https://github.com/ggml-org/whisper.cpp/blob/master/examples/cli/cli.cpp#L895
 		s := CppGetSegmentStart(i) * (10000000)
 		t := CppGetSegmentEnd(i) * (10000000)
-		txt := strings.Clone(CppGetSegmentText(i))
+		// whisper.cpp can emit bytes that aren't valid UTF-8 (e.g. a multibyte
+		// codepoint split across token boundaries); protobuf string fields
+		// reject those at marshal time. Scrub before the value escapes cgo.
+		txt := strings.ToValidUTF8(strings.Clone(CppGetSegmentText(i)), "�")
 		tokens := make([]int32, CppNTokens(i))
 
 		if opts.Diarize && CppGetSegmentSpeakerTurnNext(i) {
@@ -158,5 +167,7 @@ func (w *Whisper) AudioTranscription(opts *pb.TranscriptRequest) (pb.TranscriptR
 	return pb.TranscriptResult{
 		Segments: segments,
 		Text:     strings.TrimSpace(text),
+		Language: opts.Language,
+		Duration: duration,
 	}, nil
 }

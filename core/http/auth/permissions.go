@@ -27,34 +27,38 @@ func GetCachedUserPermissions(c echo.Context, db *gorm.DB, userID string) (*User
 // Feature name constants — all code must use these, never bare strings.
 const (
 	// Agent features (default OFF for new users)
-	FeatureAgents      = "agents"
-	FeatureSkills      = "skills"
-	FeatureCollections = "collections"
-	FeatureMCPJobs     = "mcp_jobs"
+	FeatureAgents           = "agents"
+	FeatureSkills           = "skills"
+	FeatureCollections      = "collections"
+	FeatureMCPJobs          = "mcp_jobs"
+	FeatureLocalAIAssistant = "localai_assistant"
 
 	// General features (default OFF for new users)
-	FeatureFineTuning    = "fine_tuning"
-	FeatureQuantization  = "quantization"
+	FeatureFineTuning   = "fine_tuning"
+	FeatureQuantization = "quantization"
 
 	// API features (default ON for new users)
-	FeatureChat              = "chat"
-	FeatureImages            = "images"
-	FeatureAudioSpeech       = "audio_speech"
+	FeatureChat               = "chat"
+	FeatureImages             = "images"
+	FeatureAudioSpeech        = "audio_speech"
 	FeatureAudioTranscription = "audio_transcription"
-	FeatureVAD               = "vad"
-	FeatureDetection         = "detection"
-	FeatureVideo             = "video"
-	FeatureEmbeddings        = "embeddings"
-	FeatureSound             = "sound"
-	FeatureRealtime          = "realtime"
-	FeatureRerank            = "rerank"
-	FeatureTokenize          = "tokenize"
-	FeatureMCP               = "mcp"
-	FeatureStores            = "stores"
+	FeatureVAD                = "vad"
+	FeatureDetection          = "detection"
+	FeatureVideo              = "video"
+	FeatureEmbeddings         = "embeddings"
+	FeatureSound              = "sound"
+	FeatureRealtime           = "realtime"
+	FeatureRerank             = "rerank"
+	FeatureTokenize           = "tokenize"
+	FeatureMCP                = "mcp"
+	FeatureStores             = "stores"
+	FeatureFaceRecognition    = "face_recognition"
+	FeatureVoiceRecognition   = "voice_recognition"
+	FeatureAudioTransform     = "audio_transform"
 )
 
 // AgentFeatures lists agent-related features (default OFF).
-var AgentFeatures = []string{FeatureAgents, FeatureSkills, FeatureCollections, FeatureMCPJobs}
+var AgentFeatures = []string{FeatureAgents, FeatureSkills, FeatureCollections, FeatureMCPJobs, FeatureLocalAIAssistant}
 
 // GeneralFeatures lists general features (default OFF).
 var GeneralFeatures = []string{FeatureFineTuning, FeatureQuantization}
@@ -64,6 +68,7 @@ var APIFeatures = []string{
 	FeatureChat, FeatureImages, FeatureAudioSpeech, FeatureAudioTranscription,
 	FeatureVAD, FeatureDetection, FeatureVideo, FeatureEmbeddings, FeatureSound,
 	FeatureRealtime, FeatureRerank, FeatureTokenize, FeatureMCP, FeatureStores,
+	FeatureFaceRecognition, FeatureVoiceRecognition, FeatureAudioTransform,
 }
 
 // AllFeatures lists all known features (used by UI and validation).

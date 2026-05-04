@@ -57,6 +57,27 @@ var RouteFeatureRegistry = []RouteFeature{
 	// Detection
 	{"POST", "/v1/detection", FeatureDetection},
 
+	// Face recognition
+	{"POST", "/v1/face/verify", FeatureFaceRecognition},
+	{"POST", "/v1/face/analyze", FeatureFaceRecognition},
+	{"POST", "/v1/face/embed", FeatureFaceRecognition},
+	{"POST", "/v1/face/register", FeatureFaceRecognition},
+	{"POST", "/v1/face/identify", FeatureFaceRecognition},
+	{"POST", "/v1/face/forget", FeatureFaceRecognition},
+
+	// Voice (speaker) recognition
+	{"POST", "/v1/voice/verify", FeatureVoiceRecognition},
+	{"POST", "/v1/voice/analyze", FeatureVoiceRecognition},
+	{"POST", "/v1/voice/embed", FeatureVoiceRecognition},
+	{"POST", "/v1/voice/register", FeatureVoiceRecognition},
+	{"POST", "/v1/voice/identify", FeatureVoiceRecognition},
+	{"POST", "/v1/voice/forget", FeatureVoiceRecognition},
+
+	// Audio transform (echo cancellation, noise suppression, voice conversion, etc.)
+	{"POST", "/audio/transformations", FeatureAudioTransform},
+	{"POST", "/audio/transform", FeatureAudioTransform},
+	{"GET", "/audio/transformations/stream", FeatureAudioTransform},
+
 	// Video
 	{"POST", "/video", FeatureVideo},
 
@@ -123,6 +144,7 @@ func AgentFeatureMetas() []FeatureMeta {
 		{FeatureSkills, "Skills", false},
 		{FeatureCollections, "Collections", false},
 		{FeatureMCPJobs, "MCP CI Jobs", false},
+		{FeatureLocalAIAssistant, "LocalAI Assistant", false},
 	}
 }
 
@@ -151,5 +173,8 @@ func APIFeatureMetas() []FeatureMeta {
 		{FeatureTokenize, "Tokenize", true},
 		{FeatureMCP, "MCP", true},
 		{FeatureStores, "Stores", true},
+		{FeatureFaceRecognition, "Face Recognition", true},
+		{FeatureVoiceRecognition, "Voice Recognition", true},
+		{FeatureAudioTransform, "Audio Transform", true},
 	}
 }

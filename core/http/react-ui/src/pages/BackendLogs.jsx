@@ -11,8 +11,8 @@ function wsUrl(path) {
 }
 
 const STREAM_BADGE = {
-  stdout: { bg: 'rgba(59,130,246,0.15)', color: '#60a5fa', label: 'stdout' },
-  stderr: { bg: 'rgba(239,68,68,0.15)', color: '#f87171', label: 'stderr' },
+  stdout: { bg: 'var(--color-info-light)', color: 'var(--color-log-info)', label: 'stdout' },
+  stderr: { bg: 'var(--color-error-light)', color: 'var(--color-log-stderr)', label: 'stderr' },
 }
 
 // Detail view: log lines for a specific model
@@ -149,7 +149,7 @@ function BackendLogsDetail({ modelId }) {
   }
 
   return (
-    <div className="page">
+    <div className="page page--wide">
       <div className="page-header">
         <div>
           <h1 className="page-title" style={{ marginBottom: 0 }}>
@@ -229,7 +229,7 @@ function BackendLogsDetail({ modelId }) {
             borderRadius: 'var(--radius-md)',
             overflow: 'auto',
             maxHeight: 'calc(100vh - 280px)',
-            fontFamily: 'JetBrains Mono, Consolas, monospace',
+            fontFamily: 'var(--font-mono)',
             fontSize: '0.75rem',
             lineHeight: '1.5',
           }}
@@ -283,7 +283,7 @@ export default function BackendLogs() {
 
   // No model specified — redirect to System page
   return (
-    <div className="page">
+    <div className="page page--wide">
       <div className="empty-state">
         <div className="empty-state-icon"><i className="fas fa-terminal" /></div>
         <h2 className="empty-state-title">No model selected</h2>

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { p2pApi } from '../utils/api'
 import LoadingSpinner from '../components/LoadingSpinner'
+import ImageSelector, { useImageSelector, dockerImage, dockerFlags } from '../components/ImageSelector'
 
 function NodeCard({ node, label, iconColor, iconBg }) {
   return (
@@ -23,7 +25,7 @@ function NodeCard({ node, label, iconColor, iconBg }) {
           </div>
           <div>
             <h4 style={{ fontSize: '0.875rem', fontWeight: 600 }}>{label}</h4>
-            <p style={{ fontSize: '0.75rem', fontFamily: "'JetBrains Mono', monospace", color: 'var(--color-text-secondary)', wordBreak: 'break-all' }}>
+            <p style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', wordBreak: 'break-all' }}>
               {node.id}
             </p>
           </div>
@@ -67,7 +69,7 @@ function CommandBlock({ command, addToast }) {
       <pre style={{
         background: 'var(--color-bg-primary)', padding: 'var(--spacing-md)',
         paddingRight: 'var(--spacing-xl)', borderRadius: 'var(--radius-md)',
-        fontSize: '0.8125rem', fontFamily: "'JetBrains Mono', monospace",
+        fontSize: '0.8125rem', fontFamily: 'var(--font-mono)',
         whiteSpace: 'pre-wrap', wordBreak: 'break-all',
         color: 'var(--color-warning)', overflow: 'auto',
         border: '1px solid var(--color-border-subtle)',
@@ -79,7 +81,7 @@ function CommandBlock({ command, addToast }) {
         style={{
           position: 'absolute', top: 8, right: 8,
           background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border-subtle)',
-          borderRadius: 'var(--radius-sm)', padding: '4px 8px', cursor: 'pointer',
+          borderRadius: 'var(--radius-sm)', padding: 'var(--spacing-xs) var(--spacing-sm)', cursor: 'pointer',
           color: 'var(--color-text-secondary)', fontSize: '0.75rem',
         }}
         title="Copy"
@@ -102,6 +104,7 @@ function StepNumber({ n, bg, color }) {
 
 export default function P2P() {
   const { addToast } = useOutletContext()
+  const { t } = useTranslation('admin')
   const [workers, setWorkers] = useState([])
   const [mlxWorkers, setMlxWorkers] = useState([])
   const [federation, setFederation] = useState([])
@@ -110,6 +113,7 @@ export default function P2P() {
   const [enabled, setEnabled] = useState(false)
   const [token, setToken] = useState('')
   const [activeTab, setActiveTab] = useState('federation')
+  const imgSelector = useImageSelector('cpu')
 
   const fetchData = useCallback(async () => {
     try {
@@ -168,7 +172,7 @@ export default function P2P() {
 
   if (loading) {
     return (
-      <div className="page" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
+      <div className="page page--narrow" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
         <LoadingSpinner size="lg" />
       </div>
     )
@@ -177,7 +181,7 @@ export default function P2P() {
   // ── P2P Disabled ──
   if (!enabled) {
     return (
-      <div className="page">
+      <div className="page page--narrow">
         <div style={{ textAlign: 'center', padding: 'var(--spacing-xl) 0' }}>
           <i className="fas fa-network-wired" style={{ fontSize: '3rem', color: 'var(--color-primary)', marginBottom: 'var(--spacing-md)' }} />
           <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: 'var(--spacing-sm)' }}>
@@ -227,13 +231,16 @@ export default function P2P() {
             <i className="fas fa-rocket" style={{ color: 'var(--color-accent)', marginRight: 'var(--spacing-sm)' }} />
             How to Enable P2P
           </h3>
+          <p style={{ fontWeight: 600, fontSize: '0.8125rem', marginBottom: 'var(--spacing-xs)' }}>Select your hardware</p>
+          <ImageSelector selected={imgSelector.selected} onSelect={imgSelector.setSelected} dev={imgSelector.dev} onDevChange={imgSelector.setDev} />
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
             <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
               <StepNumber n={1} bg="var(--color-accent-light)" color="var(--color-accent)" />
               <div style={{ flex: 1 }}>
                 <p style={{ fontWeight: 500, marginBottom: 'var(--spacing-xs)' }}>Start LocalAI with P2P enabled</p>
                 <CommandBlock
-                  command={`docker run -ti --net host --name local-ai \\\n  localai/localai:latest-cpu run --p2p`}
+                  command={`docker run -ti --net host ${dockerFlags(imgSelector.option) ? dockerFlags(imgSelector.option) + ' ' : ''}\\\n  --name local-ai \\\n  ${dockerImage(imgSelector.option, imgSelector.dev)} run --p2p`}
                   addToast={addToast}
                 />
                 <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.8125rem', marginTop: 'var(--spacing-xs)' }}>
@@ -246,7 +253,7 @@ export default function P2P() {
               <div style={{ flex: 1 }}>
                 <p style={{ fontWeight: 500, marginBottom: 'var(--spacing-xs)' }}>Or use an existing token</p>
                 <CommandBlock
-                  command={`docker run -ti --net host \\\n  -e TOKEN="your-token-here" \\\n  --name local-ai \\\n  localai/localai:latest-cpu run --p2p`}
+                  command={`docker run -ti --net host ${dockerFlags(imgSelector.option) ? dockerFlags(imgSelector.option) + ' ' : ''}\\\n  -e TOKEN="your-token-here" \\\n  --name local-ai \\\n  ${dockerImage(imgSelector.option, imgSelector.dev)} run --p2p`}
                   addToast={addToast}
                 />
                 <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.8125rem', marginTop: 'var(--spacing-xs)' }}>
@@ -287,14 +294,14 @@ export default function P2P() {
   const mlxTotal = stats.mlx_workers?.total ?? 0
 
   return (
-    <div className="page">
+    <div className="page page--narrow">
       <div className="page-header">
         <h1 className="page-title">
           <i className="fas fa-circle-nodes" style={{ marginRight: 'var(--spacing-sm)' }} />
-          Distributed AI Computing
+          {t('p2p.title')}
         </h1>
         <p className="page-subtitle">
-          Scale your AI workloads across multiple devices with peer-to-peer distribution
+          {t('p2p.subtitle')}
           {' '}
           <a href="https://localai.io/features/distribute/" target="_blank" rel="noopener noreferrer"
             style={{ color: 'var(--color-primary)' }}>
@@ -322,7 +329,7 @@ export default function P2P() {
             padding: 'var(--spacing-md)', borderRadius: 'var(--radius-md)',
             wordBreak: 'break-all', whiteSpace: 'pre-wrap',
             border: '1px solid var(--color-border-subtle)', cursor: 'pointer',
-            fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8125rem',
+            fontFamily: 'var(--font-mono)', fontSize: '0.8125rem',
           }}
         >
           {token || 'Loading...'}
@@ -454,7 +461,7 @@ export default function P2P() {
                 </div>
                 <i className="fas fa-arrow-right" style={{ color: 'var(--color-text-muted)', fontSize: '1rem' }} />
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', gap: '4px', marginBottom: 'var(--spacing-xs)' }}>
+                  <div style={{ display: 'flex', gap: 'var(--spacing-xs)', marginBottom: 'var(--spacing-xs)' }}>
                     {[1, 2, 3].map(n => (
                       <div key={n} style={{
                         width: 36, height: 36, borderRadius: 'var(--radius-sm)',
@@ -512,6 +519,9 @@ export default function P2P() {
               background: 'var(--color-bg-primary)', borderRadius: 'var(--radius-lg)',
               border: '1px solid var(--color-border-subtle)', padding: 'var(--spacing-lg)',
             }}>
+              <p style={{ fontWeight: 600, fontSize: '0.8125rem', marginBottom: 'var(--spacing-xs)' }}>Select your hardware</p>
+              <ImageSelector selected={imgSelector.selected} onSelect={imgSelector.setSelected} dev={imgSelector.dev} onDevChange={imgSelector.setDev} />
+
               {/* Step 1 */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-sm)' }}>
                 <StepNumber n={1} bg="var(--color-success-light)" color="var(--color-success)" />
@@ -523,7 +533,7 @@ export default function P2P() {
                 This is the entry point for your API clients. It receives requests and distributes them to federated instances.
               </p>
               <CommandBlock
-                command={`docker run -ti --net host \\\n  -e TOKEN="${token}" \\\n  --name local-ai-federated \\\n  localai/localai:latest-cpu federated`}
+                command={`docker run -ti --net host ${dockerFlags(imgSelector.option) ? dockerFlags(imgSelector.option) + ' ' : ''}\\\n  -e TOKEN="${token}" \\\n  --name local-ai-federated \\\n  ${dockerImage(imgSelector.option, imgSelector.dev)} federated`}
                 addToast={addToast}
               />
               <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem', marginTop: 'var(--spacing-sm)' }}>
@@ -544,20 +554,11 @@ export default function P2P() {
                 Run this on each machine you want to add as a worker. Each instance runs your models and receives tasks from the federated server.
               </p>
               <CommandBlock
-                command={`docker run -ti --net host \\\n  -e TOKEN="${token}" \\\n  --name local-ai \\\n  localai/localai:latest-cpu run --federated --p2p`}
+                command={`docker run -ti --net host ${dockerFlags(imgSelector.option) ? dockerFlags(imgSelector.option) + ' ' : ''}\\\n  -e TOKEN="${token}" \\\n  --name local-ai \\\n  ${dockerImage(imgSelector.option, imgSelector.dev)} run --federated --p2p`}
                 addToast={addToast}
               />
               <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem', marginTop: 'var(--spacing-sm)' }}>
                 Listens on port <code>8080</code> by default. To change it, add <code>-e ADDRESS=:9090</code>.
-              </p>
-
-              <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginTop: 'var(--spacing-lg)' }}>
-                For GPU images and all available options, see the{' '}
-                <a href="https://localai.io/basics/container/" target="_blank" rel="noopener noreferrer"
-                  style={{ color: 'var(--color-primary)' }}>Container images</a>
-                {' '}and{' '}
-                <a href="https://localai.io/features/distribute/" target="_blank" rel="noopener noreferrer"
-                  style={{ color: 'var(--color-primary)' }}>Distribution</a> docs.
               </p>
             </div>
           </div>
@@ -608,7 +609,7 @@ export default function P2P() {
                   <span style={{ fontSize: '0.625rem', color: 'var(--color-text-muted)' }}>RPC</span>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', gap: '4px', marginBottom: 'var(--spacing-xs)' }}>
+                  <div style={{ display: 'flex', gap: 'var(--spacing-xs)', marginBottom: 'var(--spacing-xs)' }}>
                     {['Layer 1-10', 'Layer 11-20', 'Layer 21-30'].map((label, i) => (
                       <div key={i} style={{ textAlign: 'center' }}>
                         <div style={{
@@ -688,7 +689,7 @@ export default function P2P() {
                   <span style={{ fontSize: '0.625rem', color: 'var(--color-text-muted)' }}>Ring / JACCL</span>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', gap: '4px', marginBottom: 'var(--spacing-xs)' }}>
+                  <div style={{ display: 'flex', gap: 'var(--spacing-xs)', marginBottom: 'var(--spacing-xs)' }}>
                     {['Layers 1-16', 'Layers 17-32'].map((label, i) => (
                       <div key={i} style={{ textAlign: 'center' }}>
                         <div style={{
@@ -755,8 +756,10 @@ export default function P2P() {
               <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginBottom: 'var(--spacing-sm)' }}>
                 Each worker exposes its GPU/CPU memory as a shard for distributed model inference.
               </p>
+              <p style={{ fontWeight: 600, fontSize: '0.8125rem', marginBottom: 'var(--spacing-xs)' }}>Select your hardware</p>
+              <ImageSelector selected={imgSelector.selected} onSelect={imgSelector.setSelected} dev={imgSelector.dev} onDevChange={imgSelector.setDev} />
               <CommandBlock
-                command={`docker run -ti --net host \\\n  -e TOKEN="${token}" \\\n  --name local-ai-worker \\\n  localai/localai:latest-cpu worker p2p-llama-cpp-rpc`}
+                command={`docker run -ti --net host ${dockerFlags(imgSelector.option) ? dockerFlags(imgSelector.option) + ' ' : ''}\\\n  -e TOKEN="${token}" \\\n  --name local-ai-worker \\\n  ${dockerImage(imgSelector.option, imgSelector.dev)} worker p2p-llama-cpp-rpc`}
                 addToast={addToast}
               />
             </div>

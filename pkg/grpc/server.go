@@ -2,12 +2,20 @@ package grpc
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
+	"strings"
 
 	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // A GRPC Server that allows to run LLM inference.
@@ -47,6 +55,7 @@ func (s *server) LoadModel(ctx context.Context, in *pb.ModelOptions) (*pb.Result
 		s.llm.Lock()
 		defer s.llm.Unlock()
 	}
+
 	err := s.llm.Load(in)
 	if err != nil {
 		return &pb.Result{Message: fmt.Sprintf("Error loading model: %s", err.Error()), Success: false}, err
@@ -144,6 +153,66 @@ func (s *server) Detect(ctx context.Context, in *pb.DetectOptions) (*pb.DetectRe
 	return &res, nil
 }
 
+func (s *server) FaceVerify(ctx context.Context, in *pb.FaceVerifyRequest) (*pb.FaceVerifyResponse, error) {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	res, err := s.llm.FaceVerify(in)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (s *server) FaceAnalyze(ctx context.Context, in *pb.FaceAnalyzeRequest) (*pb.FaceAnalyzeResponse, error) {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	res, err := s.llm.FaceAnalyze(in)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (s *server) VoiceVerify(ctx context.Context, in *pb.VoiceVerifyRequest) (*pb.VoiceVerifyResponse, error) {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	res, err := s.llm.VoiceVerify(in)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (s *server) VoiceAnalyze(ctx context.Context, in *pb.VoiceAnalyzeRequest) (*pb.VoiceAnalyzeResponse, error) {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	res, err := s.llm.VoiceAnalyze(in)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (s *server) VoiceEmbed(ctx context.Context, in *pb.VoiceEmbedRequest) (*pb.VoiceEmbedResponse, error) {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	res, err := s.llm.VoiceEmbed(in)
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 func (s *server) AudioTranscription(ctx context.Context, in *pb.TranscriptRequest) (*pb.TranscriptResult, error) {
 	if s.llm.Locking() {
 		s.llm.Lock()
@@ -161,16 +230,40 @@ func (s *server) AudioTranscription(ctx context.Context, in *pb.TranscriptReques
 		}
 		tresult.Segments = append(tresult.Segments,
 			&pb.TranscriptSegment{
-				Text:   s.Text,
-				Id:     int32(s.Id),
-				Start:  int64(s.Start),
-				End:    int64(s.End),
-				Tokens: tks,
+				Text:    s.Text,
+				Id:      int32(s.Id),
+				Start:   int64(s.Start),
+				End:     int64(s.End),
+				Tokens:  tks,
+				Speaker: s.Speaker,
 			})
 	}
 
 	tresult.Text = result.Text
+	tresult.Language = result.Language
+	tresult.Duration = result.Duration
 	return tresult, nil
+}
+
+func (s *server) AudioTranscriptionStream(in *pb.TranscriptRequest, stream pb.Backend_AudioTranscriptionStreamServer) error {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	resultChan := make(chan *pb.TranscriptStreamResponse)
+
+	done := make(chan bool)
+	go func() {
+		for chunk := range resultChan {
+			stream.Send(chunk)
+		}
+		done <- true
+	}()
+
+	err := s.llm.AudioTranscriptionStream(in, resultChan)
+	<-done
+
+	return err
 }
 
 func (s *server) PredictStream(in *pb.PredictOptions, stream pb.Backend_PredictStreamServer) error {
@@ -308,6 +401,80 @@ func (s *server) AudioDecode(ctx context.Context, in *pb.AudioDecodeRequest) (*p
 	return res, nil
 }
 
+func (s *server) AudioTransform(ctx context.Context, in *pb.AudioTransformRequest) (*pb.AudioTransformResult, error) {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+	res, err := s.llm.AudioTransform(in)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (s *server) AudioTransformStream(stream pb.Backend_AudioTransformStreamServer) error {
+	if s.llm.Locking() {
+		s.llm.Lock()
+		defer s.llm.Unlock()
+	}
+
+	in := make(chan *pb.AudioTransformFrameRequest, 4)
+	out := make(chan *pb.AudioTransformFrameResponse, 4)
+
+	// Pump incoming frames from the gRPC stream into `in`. EOF closes the
+	// channel, which signals the backend that the client is done sending.
+	recvErrCh := make(chan error, 1)
+	go func() {
+		defer close(in)
+		for {
+			req, err := stream.Recv()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					recvErrCh <- nil
+					return
+				}
+				recvErrCh <- err
+				return
+			}
+			select {
+			case in <- req:
+			case <-stream.Context().Done():
+				recvErrCh <- stream.Context().Err()
+				return
+			}
+		}
+	}()
+
+	// Pump outgoing frames from `out` to the gRPC stream. The backend closes
+	// `out` on completion.
+	sendDone := make(chan error, 1)
+	go func() {
+		for resp := range out {
+			if err := stream.Send(resp); err != nil {
+				sendDone <- err
+				// Drain `out` so the backend can finish.
+				for range out {
+				}
+				return
+			}
+		}
+		sendDone <- nil
+	}()
+
+	backendErr := s.llm.AudioTransformStream(in, out)
+	sendErr := <-sendDone
+	recvErr := <-recvErrCh
+
+	if backendErr != nil {
+		return backendErr
+	}
+	if sendErr != nil {
+		return sendErr
+	}
+	return recvErr
+}
+
 func (s *server) StartFineTune(ctx context.Context, in *pb.FineTuneRequest) (*pb.FineTuneJobResult, error) {
 	if s.llm.Locking() {
 		s.llm.Lock()
@@ -434,15 +601,83 @@ func (s *server) ModelMetadata(ctx context.Context, in *pb.ModelOptions) (*pb.Mo
 	return res, nil
 }
 
+func (s *server) Free(ctx context.Context, in *pb.HealthMessage) (*pb.Result, error) {
+	if err := s.llm.Free(); err != nil {
+		return &pb.Result{Success: false, Message: err.Error()}, nil
+	}
+	return &pb.Result{Success: true}, nil
+}
+
+// NewBackendServer creates a pb.BackendServer.
+func NewBackendServer(model AIModel) pb.BackendServer {
+	return &server{llm: model}
+}
+
+// AuthTokenEnvVar is the environment variable used to configure gRPC bearer token auth.
+const AuthTokenEnvVar = "LOCALAI_GRPC_AUTH_TOKEN"
+
+// validateToken extracts the bearer token from gRPC metadata and validates it.
+func validateToken(ctx context.Context, expected string) error {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "missing metadata")
+	}
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return status.Error(codes.Unauthenticated, "missing authorization header")
+	}
+	raw := values[0]
+	if !strings.HasPrefix(raw, "Bearer ") {
+		return status.Error(codes.Unauthenticated, "authorization must use Bearer scheme")
+	}
+	token := strings.TrimPrefix(raw, "Bearer ")
+	if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+		return status.Error(codes.Unauthenticated, "invalid token")
+	}
+	return nil
+}
+
+func tokenUnaryInterceptor(token string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err := validateToken(ctx, token); err != nil {
+			return nil, err
+		}
+		return handler(ctx, req)
+	}
+}
+
+func tokenStreamInterceptor(token string) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := validateToken(ss.Context(), token); err != nil {
+			return err
+		}
+		return handler(srv, ss)
+	}
+}
+
+// serverOpts returns the common gRPC server options, including auth interceptors
+// when LOCALAI_GRPC_AUTH_TOKEN is set.
+func serverOpts() []grpc.ServerOption {
+	opts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
+		grpc.MaxSendMsgSize(maxGRPCMessageSize),
+	}
+	if token := os.Getenv(AuthTokenEnvVar); token != "" {
+		opts = append(opts,
+			grpc.UnaryInterceptor(tokenUnaryInterceptor(token)),
+			grpc.StreamInterceptor(tokenStreamInterceptor(token)),
+		)
+		log.Printf("gRPC auth enabled via %s", AuthTokenEnvVar)
+	}
+	return opts
+}
+
 func StartServer(address string, model AIModel) error {
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
-	s := grpc.NewServer(
-		grpc.MaxRecvMsgSize(50*1024*1024), // 50MB
-		grpc.MaxSendMsgSize(50*1024*1024), // 50MB
-	)
+	s := grpc.NewServer(serverOpts()...)
 	pb.RegisterBackendServer(s, &server{llm: model})
 	log.Printf("gRPC Server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
@@ -457,10 +692,7 @@ func RunServer(address string, model AIModel) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := grpc.NewServer(
-		grpc.MaxRecvMsgSize(50*1024*1024), // 50MB
-		grpc.MaxSendMsgSize(50*1024*1024), // 50MB
-	)
+	s := grpc.NewServer(serverOpts()...)
 	pb.RegisterBackendServer(s, &server{llm: model})
 	log.Printf("gRPC Server listening at %v", lis.Addr())
 	if err = s.Serve(lis); err != nil {

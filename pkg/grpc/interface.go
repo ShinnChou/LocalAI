@@ -17,7 +17,13 @@ type AIModel interface {
 	GenerateImage(*pb.GenerateImageRequest) error
 	GenerateVideo(*pb.GenerateVideoRequest) error
 	Detect(*pb.DetectOptions) (pb.DetectResponse, error)
+	FaceVerify(*pb.FaceVerifyRequest) (pb.FaceVerifyResponse, error)
+	FaceAnalyze(*pb.FaceAnalyzeRequest) (pb.FaceAnalyzeResponse, error)
+	VoiceVerify(*pb.VoiceVerifyRequest) (pb.VoiceVerifyResponse, error)
+	VoiceAnalyze(*pb.VoiceAnalyzeRequest) (pb.VoiceAnalyzeResponse, error)
+	VoiceEmbed(*pb.VoiceEmbedRequest) (pb.VoiceEmbedResponse, error)
 	AudioTranscription(*pb.TranscriptRequest) (pb.TranscriptResult, error)
+	AudioTranscriptionStream(*pb.TranscriptRequest, chan *pb.TranscriptStreamResponse) error
 	TTS(*pb.TTSRequest) error
 	TTSStream(*pb.TTSRequest, chan []byte) error
 	SoundGeneration(*pb.SoundGenerationRequest) error
@@ -33,6 +39,9 @@ type AIModel interface {
 
 	AudioEncode(*pb.AudioEncodeRequest) (*pb.AudioEncodeResult, error)
 	AudioDecode(*pb.AudioDecodeRequest) (*pb.AudioDecodeResult, error)
+
+	AudioTransform(*pb.AudioTransformRequest) (*pb.AudioTransformResult, error)
+	AudioTransformStream(in <-chan *pb.AudioTransformFrameRequest, out chan<- *pb.AudioTransformFrameResponse) error
 
 	ModelMetadata(*pb.ModelOptions) (*pb.ModelMetadataResponse, error)
 
